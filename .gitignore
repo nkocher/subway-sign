@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Project-specific
+*.log
+
+# Claude Code
+.claude/
+
+# Deployment-specific (contains local IPs/paths)
+config.json
+deploy.sh
+systemd/*.service
+!systemd/*.example
+
+# Tests folder (contains local test outputs)
+tests/
+
+# Binary files
+*.dmg
+*.woff2.zip
+
+# Tool outputs
+tools/font_comparison/
+
+# Personal development notes
+TODO.md

@@ -1,0 +1,20 @@
+[Unit]
+Description=NYC MTA Subway Sign Web Interface
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/home/YOUR_USERNAME/subway-sign/web
+ExecStart=/usr/bin/python3 /home/YOUR_USERNAME/subway-sign/web/app.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
