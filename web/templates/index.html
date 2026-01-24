@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <title>Subway Sign</title>
+
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#0039A6">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Subway Sign">
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Ccircle cx='96' cy='96' r='88' fill='%230039A6'/%3E%3Ctext x='96' y='130' font-size='100' font-family='Arial' font-weight='bold' text-anchor='middle' fill='white'%3EM%3C/text%3E%3C/svg%3E">
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <!-- Alert Toast (top of screen, auto-dismiss) -->
+    <div id="toast" class="toast"></div>
+
+    <!-- Main View -->
+    <div id="mainView" class="main-view">
+        <!-- Current Station Display (Hero Section) -->
+        <div class="station-hero" id="stationHero">
+            <div class="station-name" id="heroStationName">Loading...</div>
+            <div class="station-routes" id="heroRoutes"></div>
+            <div class="station-alerts" id="heroAlerts"></div>
+        </div>
+
+        <!-- Favorites Grid -->
+        <div class="favorites-section" id="favoritesSection">
+            <div class="favorites-header">
+                <h3>Favorites</h3>
+                <button class="btn-edit" id="btnEditFavorites" style="display: none;">Edit</button>
+            </div>
+            <div class="favorites-search" id="favoritesSearch" style="display: none;">
+                <input type="text" id="favoritesSearchInput" placeholder="Search favorites..." autocomplete="off">
+            </div>
+            <div class="favorites-carousel" id="favoritesCarousel">
+                <!-- Favorites injected here -->
+            </div>
+        </div>
+
+        <!-- Bottom Actions (Thumb Zone) -->
+        <div class="bottom-actions">
+            <button class="btn-secondary" id="btnAddFavorite" onclick="promptAddFavorite()" title="Add to Favorites">
+                ★
+            </button>
+            <button class="btn-primary btn-large" id="btnChangeStation" onclick="openStationPicker()">
+                Change Station
+            </button>
+            <button class="btn-secondary" id="btnSettings" onclick="openSettings()" title="Settings">
+                ⚙
+            </button>
+        </div>
+    </div>
+
+    <!-- Station Picker Bottom Sheet -->
+    <div id="stationPicker" class="bottom-sheet">
+        <div class="bottom-sheet-backdrop" onclick="closeStationPicker()"></div>
+        <div class="bottom-sheet-content">
+            <div class="bottom-sheet-handle"></div>
+            <div class="bottom-sheet-header">
+                <h2>Select Station</h2>
+                <button class="btn-icon" onclick="closeStationPicker()">×</button>
+            </div>
+
+            <!-- Search -->
+            <div class="search-box">
+                <input type="text" id="stationSearch" placeholder="Search stations..." autocomplete="off">
+            </div>
+
+            <!-- Filter Chips -->
+            <div class="filter-chips" id="filterChips">
+                <div class="filter-section">
+                    <span class="filter-label">Line:</span>
+                    <div class="chip-scroll-wrapper">
+                        <div class="chip-scroll" id="routeChips"></div>
+                    </div>
+                </div>
+                <div class="filter-section">
+                    <span class="filter-label">Borough:</span>
+                    <div class="chip-scroll-wrapper">
+                        <div class="chip-scroll" id="boroughChips"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- All Stations (includes recents at top) -->
+            <div class="station-list" id="stationList"></div>
+        </div>
+    </div>
+
+    <!-- Settings Bottom Sheet -->
+    <div id="settingsSheet" class="bottom-sheet">
+        <div class="bottom-sheet-backdrop" onclick="closeSettings()"></div>
+        <div class="bottom-sheet-content">
+            <div class="bottom-sheet-handle"></div>
+            <div class="bottom-sheet-header">
+                <h2>Settings</h2>
+                <button class="btn-icon" onclick="closeSettings()">×</button>
+            </div>
+
+            <div class="settings-list">
+                <div class="setting-item">
+                    <label>Brightness</label>
+                    <input type="range" id="brightness" min="0" max="100" value="50">
+                    <span id="brightnessValue">50%</span>
+                </div>
+
+                <div class="setting-item">
+                    <label>System Uptime</label>
+                    <span id="systemUptime" class="setting-value">Loading...</span>
+                </div>
+
+                <div class="setting-item">
+                    <button class="btn-danger" onclick="restartDisplay()">Restart Display</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        // ========== GLOBAL STATE ==========
+        let stations = [];
+        let currentConfig = {};
+        let selectedStation = null;
+        let favorites = [];
+        let recentStations = JSON.parse(localStorage.getItem('recent_stations') || '[]');
+        let selectedRoute = null;
+        let selectedBorough = null;
+        let editMode = false;
+        let dragState = null;
+
+        // ========== UUID POLYFILL ==========
+        // Fallback for browsers that don't support crypto.randomUUID()
+        function generateUUID() {
+            if (crypto.randomUUID) {
+                return crypto.randomUUID();
+            }
+            // Polyfill for older browsers
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        // ========== FAVORITES MIGRATION & LOADING ==========
+        function migrateFavorites() {
+            // Try new format first
+            const v2 = localStorage.getItem('subway_favorites_v2');
+            if (v2) {
+                try {
+                    const data = JSON.parse(v2);
+                    return data.favorites || [];
+                } catch (e) {
+                    console.error('Error parsing v2 favorites:', e);
+                }
+            }
+
+            // Migrate from old format
+            const old = localStorage.getItem('subway_favorites');
+            if (old) {
+                try {
+                    const legacy = JSON.parse(old);
+                    if (Array.isArray(legacy) && legacy.length > 0) {
+                        const migrated = legacy.map((fav, i) => ({
+                            id: generateUUID(),
+                            name: fav.name || fav.station,
+                            station: fav.station,
+                            routes: fav.routes || [],
+                            order: i,
+                            lastUsed: Date.now(),
+                            createdAt: Date.now()
+                        }));
+
+                        // Save in new format
+                        saveFavorites(migrated);
+                        return migrated;
+                    }
+                } catch (e) {
+                    console.error('Error migrating favorites:', e);
+                }
+            }
+
+            return [];
+        }
+
+        function saveFavorites(favs) {
+            const data = {
+                version: 2,
+                favorites: favs
+            };
+            localStorage.setItem('subway_favorites_v2', JSON.stringify(data));
+        }
+
+        // ========== INITIALIZATION ==========
+        document.addEventListener('DOMContentLoaded', async function() {
+            favorites = migrateFavorites();
+            await loadStations();
+            loadCurrentConfig();
+            refreshStatus();
+            renderFavorites();
+
+            // Auto-refresh every 30 seconds
+            setInterval(refreshStatus, 30000);
+
+            // Pull to refresh (improved)
+            let pullStartY = 0;
+            let isPulling = false;
+
+            document.addEventListener('touchstart', (e) => {
+                if (window.scrollY === 0 && !document.querySelector('.bottom-sheet.show')) {
+                    pullStartY = e.touches[0].clientY;
+                    isPulling = true;
+                }
+            });
+
+            document.addEventListener('touchmove', (e) => {
+                if (isPulling) {
+                    const currentY = e.touches[0].clientY;
+                    const distance = currentY - pullStartY;
+
+                    if (distance > 100) {
+                        isPulling = false;
+                        refreshStatus();
+                        showToast('Refreshed', 'success', 1500);
+                    }
+                }
+            });
+
+            document.addEventListener('touchend', () => {
+                isPulling = false;
+            });
+
+            // Settings listeners
+            document.getElementById('brightness').addEventListener('input', updateBrightnessLabel);
+            document.getElementById('brightness').addEventListener('change', async function() {
+                // Auto-apply when brightness changes (on release)
+                await applyChanges();
+            });
+            document.getElementById('stationSearch').addEventListener('input', filterStations);
+        });
+
+        // ========== DATA LOADING ==========
+        async function loadStations() {
+            try {
+                const response = await fetch('/api/stations/complete');
+                const data = await response.json();
+                if (data.success) {
+                    stations = data.stations.map(s => ({
+                        name: s.name,
+                        routes: s.routes || [],
+                        borough: s.borough || 'Unknown',
+                        stop_ids: s.stop_ids || []
+                    }));
+                    displayStations(stations);
+                }
+            } catch (error) {
+                showToast('Error loading stations', 'error');
+                console.error('Station loading error:', error);
+            }
+        }
+
+        async function loadCurrentConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const data = await response.json();
+
+                if (data.success) {
+                    currentConfig = data.config;
+                    updateHeroSection(currentConfig);
+                    populateSettings(currentConfig);
+
+                    // Set selectedStation from config so favorites button works
+                    if (currentConfig.station && currentConfig.station.station_name) {
+                        const stationName = currentConfig.station.station_name;
+                        selectedStation = stations.find(s => s.name === stationName) || {
+                            name: stationName,
+                            routes: currentConfig.station.routes || [],
+                            borough: 'Unknown',
+                            stop_ids: []
+                        };
+                    }
+                }
+            } catch (error) {
+                showToast('Error loading config', 'error');
+            }
+        }
+
+        async function refreshStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                if (data.success) {
+                    updateHeroFromStatus(data.status);
+
+                    // BUGFIX: Update selectedStation when status refreshes
+                    if (data.status.station) {
+                        const stationName = data.status.station;
+                        selectedStation = stations.find(s => s.name === stationName) || {
+                            name: stationName,
+                            routes: data.status.routes || [],
+                            borough: 'Unknown',
+                            stop_ids: []
+                        };
+                    }
+
+                    // Update uptime in settings if settings is open
+                    if (data.status.uptime) {
+                        document.getElementById('systemUptime').textContent = data.status.uptime;
+                    }
+                }
+            } catch (error) {
+                console.error('Refresh failed:', error);
+            }
+        }
+
+        // ========== UI UPDATES ==========
+        function updateHeroSection(config) {
+            const station = config.station || {};
+            document.getElementById('heroStationName').textContent = station.station_name || 'No Station Selected';
+
+            const routes = station.routes || [];
+            document.getElementById('heroRoutes').innerHTML = routes.length > 0
+                ? routes.map(r => `<span class="route-badge route-${r}">${r}</span>`).join(' ')
+                : '<span class="text-muted">No routes</span>';
+        }
+
+        function updateHeroFromStatus(status) {
+            document.getElementById('heroStationName').textContent = status.station || 'Unknown';
+            document.getElementById('heroRoutes').innerHTML = status.routes.length > 0
+                ? status.routes.map(r => `<span class="route-badge route-${r}">${r}</span>`).join(' ')
+                : '';
+
+            // Update alerts
+            const alertsDiv = document.getElementById('heroAlerts');
+            if (status.alerts && status.alerts.length > 0) {
+                alertsDiv.innerHTML = status.alerts.slice(0, 2).map(a =>
+                    `<div class="alert-item">⚠ ${a}</div>`
+                ).join('');
+                alertsDiv.style.display = 'block';
+            } else {
+                alertsDiv.style.display = 'none';
+            }
+        }
+
+        // ========== FAVORITES RENDERING ==========
+        function renderFavorites(filterText = '') {
+            const container = document.getElementById('favoritesCarousel');
+            const section = document.getElementById('favoritesSection');
+            const searchBox = document.getElementById('favoritesSearch');
+            const editBtn = document.getElementById('btnEditFavorites');
+
+            if (favorites.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = 'block';
+
+            // Sort by order
+            const sortedFavorites = [...favorites].sort((a, b) => a.order - b.order);
+
+            // Filter if search text provided
+            let displayFavorites = sortedFavorites;
+            if (filterText) {
+                displayFavorites = sortedFavorites.filter(fav =>
+                    fav.name.toLowerCase().includes(filterText.toLowerCase())
+                );
+            }
+
+            // Determine tier and layout
+            const count = favorites.length;
+            let layoutMode = 'grid'; // grid, list, or sections
+
+            if (count <= 10) {
+                layoutMode = 'grid';
+                container.className = 'favorites-carousel favorites-grid';
+                searchBox.style.display = 'none';
+            } else if (count <= 20) {
+                layoutMode = 'list';
+                container.className = 'favorites-carousel favorites-list';
+                searchBox.style.display = 'block';
+            } else {
+                layoutMode = 'sections';
+                container.className = 'favorites-carousel favorites-list';
+                searchBox.style.display = 'block';
+            }
+
+            // Show/hide edit button (always show if favorites exist)
+            editBtn.style.display = count > 0 ? 'block' : 'none';
+
+            // Render favorites based on layout mode
+            if (layoutMode === 'grid') {
+                container.innerHTML = renderGridMode(displayFavorites);
+            } else if (layoutMode === 'list') {
+                container.innerHTML = renderListMode(displayFavorites);
+            } else {
+                container.innerHTML = renderSectionMode(displayFavorites, filterText);
+            }
+
+            // Attach event listeners
+            attachFavoriteListeners();
+        }
+
+        function renderGridMode(favs) {
+            return favs.map((fav, i) => {
+                const station = stations.find(s => s.name === fav.station);
+                const routes = station ? station.routes : fav.routes || [];
+                const routeBadges = routes.slice(0, 6).map(r =>
+                    `<span class="route-badge-small route-${r}">${r}</span>`
+                ).join('');
+
+                return `
+                    <div class="favorite-card ${editMode ? 'edit-mode' : ''}" data-fav-id="${fav.id}" draggable="${editMode}">
+                        ${editMode ? '<div class="drag-handle">☰</div>' : ''}
+                        <div class="favorite-icon">${routeBadges || '★'}</div>
+                        <div class="favorite-name">${fav.name}</div>
+                        ${editMode ? `<button class="favorite-delete-edit" data-delete-id="${fav.id}">⊖</button>` : `<button class="favorite-delete" data-delete-id="${fav.id}">×</button>`}
+                    </div>
+                `;
+            }).join('') + '<div class="favorite-card favorite-add" onclick="promptAddFavorite()">+</div>';
+        }
+
+        function renderListMode(favs) {
+            return favs.map((fav) => {
+                const station = stations.find(s => s.name === fav.station);
+                const routes = station ? station.routes : fav.routes || [];
+                const routeBadges = routes.slice(0, 8).map(r =>
+                    `<span class="route-badge-small route-${r}">${r}</span>`
+                ).join('');
+
+                const timeSince = getTimeSince(fav.lastUsed);
+
+                return `
+                    <div class="favorite-item ${editMode ? 'edit-mode' : ''}" data-fav-id="${fav.id}" draggable="${editMode}">
+                        ${editMode ? '<div class="drag-handle">☰</div>' : ''}
+                        <div class="favorite-item-content">
+                            <div class="favorite-item-name">${fav.name}</div>
+                            <div class="favorite-item-subtitle">${timeSince}</div>
+                            <div class="favorite-item-routes">${routeBadges}</div>
+                        </div>
+                        ${editMode ? `<button class="favorite-delete-edit" data-delete-id="${fav.id}">⊖</button>` : '<div class="favorite-chevron">›</div>'}
+                    </div>
+                `;
+            }).join('') + `
+                <div class="favorite-item favorite-add-list" onclick="promptAddFavorite()">
+                    <div class="favorite-add-icon">+</div>
+                    <div class="favorite-add-text">Add Favorite</div>
+                </div>
+            `;
+        }
+
+        function renderSectionMode(favs, filterText) {
+            // Don't show sections if filtering
+            if (filterText) {
+                return renderListMode(favs);
+            }
+
+            // Get recent favorites (last 5 used)
+            const recentFavs = [...favs]
+                .sort((a, b) => (b.lastUsed || 0) - (a.lastUsed || 0))
+                .slice(0, 5);
+
+            const recentIds = new Set(recentFavs.map(f => f.id));
+            const allOthers = favs.filter(f => !recentIds.has(f.id));
+
+            let html = '';
+
+            // Recent section
+            if (recentFavs.length > 0) {
+                html += '<div class="favorites-section-header">RECENT</div>';
+                html += recentFavs.map(fav => renderListItem(fav)).join('');
+            }
+
+            // All favorites section
+            if (allOthers.length > 0) {
+                html += '<div class="favorites-section-header">ALL FAVORITES</div>';
+                html += allOthers.map(fav => renderListItem(fav)).join('');
+            }
+
+            // Add button
+            html += `
+                <div class="favorite-item favorite-add-list" onclick="promptAddFavorite()">
+                    <div class="favorite-add-icon">+</div>
+                    <div class="favorite-add-text">Add Favorite</div>
+                </div>
+            `;
+
+            return html;
+        }
+
+        function renderListItem(fav) {
+            const station = stations.find(s => s.name === fav.station);
+            const routes = station ? station.routes : fav.routes || [];
+            const routeBadges = routes.slice(0, 8).map(r =>
+                `<span class="route-badge-small route-${r}">${r}</span>`
+            ).join('');
+
+            const timeSince = getTimeSince(fav.lastUsed);
+
+            return `
+                <div class="favorite-item ${editMode ? 'edit-mode' : ''}" data-fav-id="${fav.id}" draggable="${editMode}">
+                    ${editMode ? '<div class="drag-handle">☰</div>' : ''}
+                    <div class="favorite-item-content">
+                        <div class="favorite-item-name">${fav.name}</div>
+                        <div class="favorite-item-subtitle">${timeSince}</div>
+                        <div class="favorite-item-routes">${routeBadges}</div>
+                    </div>
+                    ${editMode ? `<button class="favorite-delete-edit" data-delete-id="${fav.id}">⊖</button>` : '<div class="favorite-chevron">›</div>'}
+                </div>
+            `;
+        }
+
+        function getTimeSince(timestamp) {
+            if (!timestamp) return 'Never used';
+
+            const now = Date.now();
+            const diff = now - timestamp;
+            const seconds = Math.floor(diff / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+
+            if (seconds < 60) return 'Just now';
+            if (minutes < 60) return `${minutes}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            if (days === 1) return 'Yesterday';
+            if (days < 7) return `${days} days ago`;
+            return new Date(timestamp).toLocaleDateString();
+        }
+
+        function attachFavoriteListeners() {
+            const container = document.getElementById('favoritesCarousel');
+
+            // Click handlers for favorite items
+            container.querySelectorAll('.favorite-card[data-fav-id], .favorite-item[data-fav-id]').forEach((item) => {
+                const id = item.getAttribute('data-fav-id');
+
+                // Click to apply favorite (only if not in edit mode)
+                if (!editMode) {
+                    item.addEventListener('click', (e) => {
+                        if (!e.target.closest('.favorite-delete') && !e.target.closest('.favorite-delete-edit')) {
+                            applyFavoriteById(id);
+                        }
+                    });
+                }
+
+                // Long press to enter edit mode
+                let longPressTimer;
+                item.addEventListener('touchstart', (e) => {
+                    if (!editMode) {
+                        longPressTimer = setTimeout(() => {
+                            triggerHaptic('medium');
+                            enterEditMode();
+                        }, 600);
+                    }
+                });
+
+                item.addEventListener('touchend', () => {
+                    clearTimeout(longPressTimer);
+                });
+
+                item.addEventListener('touchmove', () => {
+                    clearTimeout(longPressTimer);
+                });
+
+                // Delete button handlers
+                const deleteBtn = item.querySelector('.favorite-delete, .favorite-delete-edit');
+                if (deleteBtn) {
+                    deleteBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        deleteFavoriteById(id);
+                    });
+                }
+
+                // Drag handlers (in edit mode)
+                if (editMode) {
+                    item.addEventListener('dragstart', handleDragStart);
+                    item.addEventListener('dragover', handleDragOver);
+                    item.addEventListener('drop', handleDrop);
+                    item.addEventListener('dragend', handleDragEnd);
+                }
+            });
+        }
+
+        function applyFavorite(index) {
+            const fav = favorites[index];
+            if (!fav) return;
+
+            triggerHaptic();
+            const station = stations.find(s => s.name === fav.station);
+            if (station) {
+                // Update lastUsed timestamp
+                fav.lastUsed = Date.now();
+                saveFavorites(favorites);
+                selectStation(station);
+                applyChanges();
+            }
+        }
+
+        function applyFavoriteById(id) {
+            const fav = favorites.find(f => f.id === id);
+            if (!fav) return;
+
+            triggerHaptic();
+            const station = stations.find(s => s.name === fav.station);
+            if (station) {
+                // Update lastUsed timestamp
+                fav.lastUsed = Date.now();
+                saveFavorites(favorites);
+                selectStation(station);
+                applyChanges();
+            }
+        }
+
+        function promptAddFavorite() {
+            if (!selectedStation) {
+                showToast('Select a station first', 'warning');
+                openStationPicker();
+                return;
+            }
+
+            // Check if already favorited
+            if (favorites.some(f => f.station === selectedStation.name)) {
+                showToast('Already in favorites', 'info');
+                return;
+            }
+
+            // Add new favorite with new schema
+            const newFavorite = {
+                id: generateUUID(),
+                name: selectedStation.name,
+                station: selectedStation.name,
+                routes: selectedStation.routes || [],
+                order: favorites.length, // Add at end
+                lastUsed: Date.now(),
+                createdAt: Date.now()
+            };
+
+            favorites.push(newFavorite);
+            saveFavorites(favorites);
+            renderFavorites();
+            showToast(`Added to favorites!`, 'success');
+            triggerHaptic('success');
+        }
+
+        function deleteFavorite(index) {
+            if (confirm(`Remove ${favorites[index].name} from favorites?`)) {
+                favorites.splice(index, 1);
+                // Reorder remaining favorites
+                favorites.forEach((fav, i) => fav.order = i);
+                saveFavorites(favorites);
+                renderFavorites();
+                showToast('Removed from favorites', 'info');
+            }
+        }
+
+        function deleteFavoriteById(id) {
+            const fav = favorites.find(f => f.id === id);
+            if (!fav) return;
+
+            if (confirm(`Remove ${fav.name} from favorites?`)) {
+                favorites = favorites.filter(f => f.id !== id);
+                // Reorder remaining favorites
+                favorites.forEach((fav, i) => fav.order = i);
+                saveFavorites(favorites);
+                renderFavorites();
+                showToast('Removed from favorites', 'info');
+                triggerHaptic('light');
+            }
+        }
+
+        // ========== EDIT MODE & REORDERING ==========
+        function enterEditMode() {
+            editMode = true;
+            const editBtn = document.getElementById('btnEditFavorites');
+            editBtn.textContent = 'Done';
+            editBtn.classList.add('edit-mode-active');
+            editBtn.onclick = exitEditMode;
+            renderFavorites();
+            triggerHaptic('medium');
+        }
+
+        function exitEditMode() {
+            editMode = false;
+            const editBtn = document.getElementById('btnEditFavorites');
+            editBtn.textContent = 'Edit';
+            editBtn.classList.remove('edit-mode-active');
+            editBtn.onclick = enterEditMode;
+            renderFavorites();
+        }
+
+        // Drag and drop handlers
+        function handleDragStart(e) {
+            const item = e.target.closest('[data-fav-id]');
+            if (!item) return;
+
+            dragState = {
+                draggedId: item.getAttribute('data-fav-id'),
+                draggedElement: item
+            };
+
+            item.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/html', item.innerHTML);
+
+            // Add visual feedback
+            setTimeout(() => {
+                item.style.opacity = '0.4';
+            }, 0);
+        }
+
+        function handleDragOver(e) {
+            if (e.preventDefault) {
+                e.preventDefault();
+            }
+
+            e.dataTransfer.dropEffect = 'move';
+
+            const item = e.target.closest('[data-fav-id]');
+            if (!item || !dragState) return;
+
+            const draggedItem = dragState.draggedElement;
+            if (item === draggedItem) return;
+
+            // Get all items
+            const container = document.getElementById('favoritesCarousel');
+            const allItems = Array.from(container.querySelectorAll('[data-fav-id]'));
+
+            const draggedIndex = allItems.indexOf(draggedItem);
+            const targetIndex = allItems.indexOf(item);
+
+            if (draggedIndex < targetIndex) {
+                item.parentNode.insertBefore(draggedItem, item.nextSibling);
+            } else {
+                item.parentNode.insertBefore(draggedItem, item);
+            }
+
+            triggerHaptic('selection');
+        }
+
+        function handleDrop(e) {
+            if (e.stopPropagation) {
+                e.stopPropagation();
+            }
+
+            return false;
+        }
+
+        function handleDragEnd(e) {
+            const item = e.target.closest('[data-fav-id]');
+            if (item) {
+                item.classList.remove('dragging');
+                item.style.opacity = '';
+            }
+
+            // Update order based on DOM position
+            if (dragState) {
+                const container = document.getElementById('favoritesCarousel');
+                const allItems = Array.from(container.querySelectorAll('[data-fav-id]'));
+
+                allItems.forEach((item, index) => {
+                    const id = item.getAttribute('data-fav-id');
+                    const fav = favorites.find(f => f.id === id);
+                    if (fav) {
+                        fav.order = index;
+                    }
+                });
+
+                saveFavorites(favorites);
+                triggerHaptic('medium');
+            }
+
+            dragState = null;
+        }
+
+        // Search handler
+        function setupFavoritesSearch() {
+            const searchInput = document.getElementById('favoritesSearchInput');
+            if (searchInput) {
+                searchInput.addEventListener('input', (e) => {
+                    renderFavorites(e.target.value);
+                });
+            }
+        }
+
+        // Setup edit button
+        document.addEventListener('DOMContentLoaded', function() {
+            const editBtn = document.getElementById('btnEditFavorites');
+            if (editBtn) {
+                editBtn.onclick = enterEditMode;
+            }
+            setupFavoritesSearch();
+        });
+
+        // ========== STATION PICKER ==========
+        function openStationPicker() {
+            document.getElementById('stationPicker').classList.add('show');
+            renderFilters();
+            displayStations(stations); // Show all stations with recents at top
+            setTimeout(() => document.getElementById('stationSearch').focus(), 300);
+        }
+
+        function renderFilters() {
+            // Get unique routes and boroughs
+            const routes = [...new Set(stations.flatMap(s => s.routes))].sort();
+            const boroughs = [...new Set(stations.map(s => s.borough))].filter(b => b !== 'Unknown').sort();
+
+            // Render route badges (just the badges, not in chips)
+            const routeContainer = document.getElementById('routeChips');
+            routeContainer.innerHTML = routes.map(route => `
+                <span class="route-badge-small route-${route} ${selectedRoute === route ? 'route-selected' : ''}"
+                      onclick="toggleRouteFilter('${route}')"
+                      style="cursor: pointer; opacity: ${selectedRoute === route ? '1' : '0.6'};">
+                    ${route}
+                </span>
+            `).join('');
+
+            // Render borough chips
+            const boroughContainer = document.getElementById('boroughChips');
+            boroughContainer.innerHTML = boroughs.map(borough => `
+                <button class="filter-chip ${selectedBorough === borough ? 'active' : ''}"
+                        onclick="toggleBoroughFilter('${borough}')">
+                    ${borough}
+                </button>
+            `).join('');
+        }
+
+        function toggleRouteFilter(route) {
+            selectedRoute = selectedRoute === route ? null : route;
+            selectedBorough = null; // Clear borough filter
+            renderFilters();
+            filterStations();
+        }
+
+        function toggleBoroughFilter(borough) {
+            selectedBorough = selectedBorough === borough ? null : borough;
+            selectedRoute = null; // Clear route filter
+            renderFilters();
+            filterStations();
+        }
+
+        function closeStationPicker() {
+            document.getElementById('stationPicker').classList.remove('show');
+        }
+
+        function displayStations(stationList, showRecents = true) {
+            const container = document.getElementById('stationList');
+
+            let html = '';
+
+            // Filter recents based on active filters
+            let filteredRecents = recentStations;
+            if (selectedRoute) {
+                filteredRecents = filteredRecents.filter(s => s.routes.includes(selectedRoute));
+            }
+            if (selectedBorough) {
+                filteredRecents = filteredRecents.filter(s => s.borough === selectedBorough);
+            }
+
+            // Add recents at the top if we should show them
+            if (showRecents && filteredRecents.length > 0) {
+                html += '<div class="recent-header">Recent</div>';
+                html += filteredRecents.slice(0, 3).map(station => `
+                    <div class="station-item station-item-recent" data-is-recent="true">
+                        <div class="station-item-name">${station.name}</div>
+                        <div class="station-item-routes">
+                            ${station.routes.map(r => `<span class="route-badge-small route-${r}">${r}</span>`).join(' ')}
+                        </div>
+                    </div>
+                `).join('');
+                html += '<div class="recent-separator"></div>';
+            }
+
+            // Add all other stations
+            if (stationList.length === 0) {
+                if (!showRecents || recentStations.length === 0) {
+                    container.innerHTML = '<p class="text-muted">No stations found</p>';
+                    return;
+                }
+            } else {
+                html += stationList.map(station => `
+                    <div class="station-item" data-station-name="${station.name}">
+                        <div class="station-item-name">${station.name}</div>
+                        <div class="station-item-routes">
+                            ${station.routes.map(r => `<span class="route-badge-small route-${r}">${r}</span>`).join(' ')}
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            container.innerHTML = html;
+
+            // Attach click handlers to recent stations (use filtered recents)
+            container.querySelectorAll('.station-item-recent').forEach((el, idx) => {
+                el.addEventListener('click', () => {
+                    selectStationAndClose(filteredRecents[idx]);
+                });
+            });
+
+            // Attach click handlers to regular stations
+            container.querySelectorAll('.station-item:not(.station-item-recent)').forEach((el) => {
+                el.addEventListener('click', () => {
+                    const stationName = el.getAttribute('data-station-name');
+                    const station = stations.find(s => s.name === stationName);
+                    if (station) {
+                        selectStationAndClose(station);
+                    }
+                });
+            });
+        }
+
+        function filterStations() {
+            const search = document.getElementById('stationSearch').value.toLowerCase();
+
+            let filtered = stations;
+            let showRecents = true;
+
+            // Apply search filter
+            if (search) {
+                filtered = filtered.filter(s => s.name.toLowerCase().includes(search));
+                showRecents = false; // Hide recents when searching
+            }
+
+            // Apply route filter
+            if (selectedRoute) {
+                filtered = filtered.filter(s => s.routes.includes(selectedRoute));
+            }
+
+            // Apply borough filter
+            if (selectedBorough) {
+                filtered = filtered.filter(s => s.borough === selectedBorough);
+            }
+
+            displayStations(filtered, showRecents);
+        }
+
+        function selectStationAndClose(station) {
+            selectStation(station);
+            closeStationPicker();
+            applyChanges();
+        }
+
+        function selectStation(station) {
+            selectedStation = station;
+
+            // Add to recent
+            recentStations = recentStations.filter(s => s.name !== station.name);
+            recentStations.unshift(station);
+            recentStations = recentStations.slice(0, 5);
+            localStorage.setItem('recent_stations', JSON.stringify(recentStations));
+        }
+
+        // ========== SETTINGS ==========
+        function openSettings() {
+            document.getElementById('settingsSheet').classList.add('show');
+        }
+
+        function closeSettings() {
+            document.getElementById('settingsSheet').classList.remove('show');
+        }
+
+        function populateSettings(config) {
+            const display = config.display || {};
+            document.getElementById('brightness').value = Math.round((display.brightness || 0.5) * 100);
+            updateBrightnessLabel();
+        }
+
+        function updateBrightnessLabel() {
+            const value = document.getElementById('brightness').value;
+            document.getElementById('brightnessValue').textContent = value + '%';
+        }
+
+        async function restartDisplay(autoRestart = false) {
+            // Only show confirmation if manually triggered
+            if (!autoRestart && !confirm('Restart the display?')) return;
+
+            try {
+                if (!autoRestart) {
+                    showToast('Restarting...', 'info');
+                }
+                const response = await fetch('/api/restart', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('Display restarted!', 'success');
+                    setTimeout(refreshStatus, 3000);
+                } else {
+                    showToast('Restart failed', 'error');
+                }
+            } catch (error) {
+                showToast('Error: ' + error.message, 'error');
+            }
+        }
+
+        // ========== APPLY CHANGES ==========
+        async function applyChanges() {
+            if (!selectedStation && !currentConfig) {
+                showToast('Select a station first', 'warning');
+                return;
+            }
+
+            // Use selected station if available, otherwise use current config
+            const stationConfig = selectedStation ? {
+                station_name: selectedStation.name,
+                routes: selectedStation.routes
+            } : currentConfig.station;
+
+            const newConfig = {
+                station: stationConfig,
+                display: {
+                    brightness: parseInt(document.getElementById('brightness').value) / 100,
+                    max_trains: currentConfig?.display?.max_trains || 6,
+                    show_alerts: currentConfig?.display?.show_alerts !== false
+                }
+            };
+
+            try {
+                showToast('Applying...', 'info');
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newConfig)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    triggerHaptic('success');
+                    showToast('Restarting display...', 'info');
+                    currentConfig = newConfig;
+                    updateHeroSection(newConfig);
+
+                    // Auto-restart display after applying changes
+                    await restartDisplay(true);
+                } else {
+                    showToast('Error: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showToast('Error: ' + error.message, 'error');
+            }
+        }
+
+        // ========== UTILITIES ==========
+        function showToast(message, type = 'info', duration = 2000) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast toast-${type} show`;
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, duration);
+        }
+
+        function triggerHaptic(type = 'light') {
+            if (!navigator.vibrate) return;
+
+            const patterns = {
+                light: [10],              // Tap to apply
+                medium: [20],             // Enter edit mode
+                heavy: [30, 10, 20],      // Delete favorite
+                success: [10, 30, 10],    // Add favorite
+                selection: [5]            // Cross boundary while dragging
+            };
+
+            navigator.vibrate(patterns[type] || patterns.light);
+        }
+
+        function setupSwipeGestures() {
+            // Global swipe gestures could go here
+        }
+
+        // ========== SERVICE WORKER ==========
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/static/service-worker.js')
+                    .then(() => console.log('PWA ready'))
+                    .catch(err => console.warn('SW failed:', err));
+            });
+        }
+    </script>
+</body>
+</html>

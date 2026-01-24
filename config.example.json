@@ -1,0 +1,15 @@
+{
+  "station": {
+    "station_name": "34 St-Herald Sq",
+    "routes": ["B", "D", "F", "M", "N", "Q", "R", "W"]
+  },
+  "display": {
+    "brightness": 0.3,
+    "max_trains": 7,
+    "show_alerts": true
+  },
+  "refresh": {
+    "trains_interval": 30,
+    "alerts_interval": 60
+  }
+}
