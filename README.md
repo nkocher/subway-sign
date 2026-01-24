@@ -32,7 +32,7 @@ A real-time MTA subway arrival display built with a Raspberry Pi 4 and LED matri
 ### 1. Clone and Configure
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/subway-sign.git
+git clone https://github.com/nkocher/subway-sign.git
 cd subway-sign
 
 # Copy example config
