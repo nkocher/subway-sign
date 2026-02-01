@@ -10,6 +10,7 @@ WorkingDirectory=/home/YOUR_USERNAME/subway-sign
 ExecStart=/usr/bin/python3 /home/YOUR_USERNAME/subway-sign/run.py
 Restart=always
 RestartSec=5
+TimeoutStopSec=10
 StandardOutput=journal
 StandardError=journal
 
@@ -17,6 +18,14 @@ StandardError=journal
 Nice=-10
 CPUSchedulingPolicy=fifo
 CPUSchedulingPriority=50
+
+# Resource limits (4GB Pi, ~54MB baseline)
+MemoryMax=512M
+OOMScoreAdjust=-500
+
+# Log rate limiting
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=100
 
 # Environment
 Environment=PYTHONUNBUFFERED=1

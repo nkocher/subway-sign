@@ -12,4 +12,6 @@ requests>=2.25.0
 # MTA GTFS-RT parsing
 nyct-gtfs>=4.0.0
 
-# Note: psutil, fuzzywuzzy, Flask removed - not needed in V2
+# Web interface
+Flask>=2.0.0
+gunicorn>=21.0.0
