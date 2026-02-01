@@ -7,7 +7,8 @@ Wants=network-online.target
 Type=simple
 User=YOUR_USERNAME
 WorkingDirectory=/home/YOUR_USERNAME/subway-sign/web
-ExecStart=/home/YOUR_USERNAME/.local/bin/gunicorn --bind 0.0.0.0:5001 --workers 2 --timeout 30 --max-requests 1000 --max-requests-jitter 50 app:app
+# Adjust path: /usr/bin/gunicorn (apt install) or /home/YOUR_USERNAME/.local/bin/gunicorn (pip install)
+ExecStart=/usr/bin/gunicorn --bind 0.0.0.0:5001 --workers 2 --timeout 30 --max-requests 1000 --max-requests-jitter 50 app:app
 Restart=always
 RestartSec=5
 TimeoutStopSec=10

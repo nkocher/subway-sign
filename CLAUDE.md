@@ -42,14 +42,53 @@ cd web && gunicorn --bind 127.0.0.1:5001 --workers 1 --timeout 5 app:app
 
 ## Deployment
 
-After SSH is restored to the Pi:
+**Pi:** `admin@192.168.0.40` at `/home/admin/subway-sign`
+
+### Prerequisites
+
+Gunicorn must be installed on the Pi via apt (not pip):
 
 ```bash
-# Verify systemd memory limits
-systemctl show subway-sign.service | grep Memory
+ssh admin@192.168.0.40 "sudo apt install -y gunicorn"
+```
+
+### Deploy workflow
+
+```bash
+# 1. Deploy code and restart subway-sign
+./deploy.sh
+
+# 2. Restart subway-web (deploy.sh only restarts subway-sign)
+ssh admin@192.168.0.40 "sudo systemctl restart subway-web.service"
+```
+
+`deploy.sh` is gitignored — create it from `deploy.example.sh` with `PI_HOST="admin@192.168.0.40"` and `PI_PATH="/home/admin/subway-sign"`.
+
+### Verified baselines (2026-02-01)
+
+Stability fixes deployed and verified:
+
+- **subway-sign RSS:** ~54MB (within 512M MemoryMax)
+- **gunicorn master RSS:** ~23MB, workers: ~50MB each (within 256M MemoryMax)
+- **OOMScoreAdjust:** -500 (display), +500 (web) — OOM killer targets web before display/sshd
+- **SIGTERM shutdown:** Clean "Deactivated successfully" — no forced kills, no leaked threads
+- **Gunicorn:** 1 master + 2 workers, auto-recycled at 1000 requests
+
+### Verification commands
+
+```bash
+# Check systemd memory limits
+systemctl show subway-sign.service -p MemoryMax  # expect 536870912
+systemctl show subway-web.service -p MemoryMax   # expect 268435456
 
 # Test graceful shutdown
 sudo systemctl restart subway-sign && journalctl -u subway-sign -n 20
+
+# Check gunicorn processes (expect master + 2 workers)
+pgrep -a gunicorn
+
+# Memory snapshot
+ps -o pid,rss,vsz,comm -p $(pgrep -f 'run.py') $(pgrep -f 'gunicorn')
 
 # Long-running stability test
 python3 tests/stability_monitor.py  # Run for 24+ hours
