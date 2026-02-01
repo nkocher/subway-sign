@@ -1,19 +1,24 @@
-/* ========== MOBILE-FIRST SUBWAY SIGN CONTROL ========== */
-/* Optimized for iPhone, Safari, one-handed use */
+/* ========== NYC SUBWAY SIGN CONTROL ========== */
+/* MTA platform signage aesthetic — Helvetica, dark panels, industrial corners */
 
 :root {
     --mta-blue: #0039A6;
     --mta-blue-dark: #002868;
-    --bg: #F5F5F7;
-    --text: #1D1D1F;
-    --text-secondary: #86868B;
-    --card-bg: #FFFFFF;
+    --mta-blue-glow: rgba(0, 57, 166, 0.25);
+    --bg: #0A0A0A;
+    --bg-elevated: #141414;
+    --bg-panel: #1A1A1A;
+    --text: #F0F0F0;
+    --text-secondary: #888888;
+    --text-muted: #555555;
+    --card-bg: #1A1A1A;
+    --card-border: #3A3A3A;
     --success: #00933C;
     --error: #EE352E;
     --warning: #FCCC0A;
-    --shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    --shadow-lg: 0 4px 20px rgba(0, 0, 0, 0.15);
-    --thumb-zone: 60%; /* Bottom 60% of screen is thumb-friendly */
+    --shadow: 0 1px 3px rgba(0,0,0,0.5);
+    --shadow-lg: 0 4px 20px rgba(0,0,0,0.6);
+    --thumb-zone: 60%;
 }
 
 * {
@@ -21,10 +26,35 @@
     -webkit-tap-highlight-color: transparent;
 }
 
+*:focus-visible {
+    outline: 2px solid var(--mta-blue);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px var(--mta-blue-glow);
+}
+
+::placeholder {
+    color: var(--text-muted);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 4px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--card-border);
+    border-radius: 2px;
+}
+
 body {
     margin: 0;
     padding: 0;
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif;
+    font-family: 'Helvetica Neue', Helvetica, 'Arial Nova', Arial, 'Nimbus Sans', sans-serif;
+    font-weight: 500;
     background: var(--bg);
     color: var(--text);
     overflow: hidden;
@@ -42,15 +72,15 @@ body {
     top: env(safe-area-inset-top, 20px);
     left: 50%;
     transform: translateX(-50%) translateY(-100px);
-    background: var(--card-bg);
+    background: var(--bg-panel);
+    border: 1px solid var(--card-border);
     padding: 12px 20px;
-    border-radius: 20px;
-    box-shadow: var(--shadow-lg);
+    border-radius: 4px;
     font-size: 14px;
     font-weight: 500;
     z-index: 10000;
     opacity: 0;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: all 0.15s ease;
     pointer-events: none;
 }
 
@@ -101,12 +131,21 @@ body {
 
 /* ========== STATION HERO SECTION ========== */
 .station-hero {
-    background: var(--card-bg);
-    border-radius: 20px;
+    background: var(--bg-panel);
+    border-radius: 2px;
+    border-top: 3px solid var(--mta-blue);
     padding: 24px;
     margin: 16px 0;
-    box-shadow: var(--shadow);
     text-align: center;
+}
+
+.station-hero-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
 }
 
 .station-name {
@@ -114,9 +153,8 @@ body {
     font-weight: 700;
     line-height: 1.2;
     margin-bottom: 16px;
-    color: var(--text);
-    /* High contrast for sunlight readability */
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    color: #FFFFFF;
+    letter-spacing: 0.02em;
 }
 
 .station-routes {
@@ -140,7 +178,6 @@ body {
     font-weight: 700;
     font-size: 16px;
     color: white;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .station-alerts {
@@ -149,10 +186,11 @@ body {
 }
 
 .alert-item {
-    background: #FFF3CD;
-    color: #856404;
+    background: rgba(252, 204, 10, 0.12);
+    color: var(--warning);
     padding: 8px 12px;
-    border-radius: 8px;
+    border-radius: 2px;
+    border-left: 3px solid var(--warning);
     font-size: 13px;
     margin-top: 8px;
 }
@@ -183,8 +221,11 @@ body {
 }
 
 .favorites-header h3 {
-    font-size: 18px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-secondary);
     margin: 0;
 }
 
@@ -196,12 +237,12 @@ body {
     font-size: 16px;
     font-weight: 500;
     cursor: pointer;
-    border-radius: 8px;
-    transition: background 0.2s;
+    border-radius: 4px;
+    transition: background 0.15s ease;
 }
 
 .btn-edit:active {
-    background: rgba(0, 57, 166, 0.1);
+    background: var(--mta-blue-glow);
 }
 
 .btn-edit.edit-mode-active {
@@ -216,12 +257,17 @@ body {
 .favorites-search input {
     width: 100%;
     padding: 12px 16px;
-    border: none;
-    background: var(--card-bg);
-    border-radius: 12px;
+    border: 1px solid var(--card-border);
+    background: var(--bg-panel);
+    border-radius: 4px;
     font-size: 15px;
     color: var(--text);
-    box-shadow: var(--shadow);
+}
+
+.favorites-search input:focus {
+    outline: 2px solid var(--mta-blue);
+    border-color: transparent;
+    box-shadow: 0 0 0 4px var(--mta-blue-glow);
 }
 
 /* Grid Mode (1-10 favorites) */
@@ -242,21 +288,21 @@ body {
 
 /* Section Headers */
 .favorites-section-header {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 11px;
+    font-weight: 700;
     color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 1.5px;
     margin: 16px 0 8px 8px;
 }
 
 .favorite-card {
     position: relative;
     background: var(--card-bg);
-    border-radius: 12px;
+    border: 1px solid var(--card-border);
+    border-radius: 2px;
     padding: 12px;
-    box-shadow: var(--shadow);
-    transition: transform 0.2s, box-shadow 0.2s;
+    transition: border-color 0.15s ease;
     cursor: pointer;
     display: flex;
     flex-direction: column;
@@ -265,7 +311,7 @@ body {
 }
 
 .favorite-card:active {
-    transform: scale(0.95);
+    border-color: var(--mta-blue);
 }
 
 .favorite-card.edit-mode {
@@ -309,14 +355,14 @@ body {
     width: 24px;
     height: 24px;
     border: none;
-    background: rgba(0, 0, 0, 0.1);
+    background: rgba(255, 255, 255, 0.1);
     border-radius: 50%;
     color: var(--text);
     font-size: 18px;
     line-height: 1;
     cursor: pointer;
     opacity: 0;
-    transition: opacity 0.2s;
+    transition: opacity 0.15s ease;
 }
 
 .favorite-card:active .favorite-delete {
@@ -362,8 +408,8 @@ body {
     align-items: center;
     justify-content: center;
     font-size: 48px;
-    color: var(--text-secondary);
-    border: 2px dashed var(--text-secondary);
+    color: var(--text-muted);
+    border: 2px dashed var(--text-muted);
     background: transparent;
 }
 
@@ -407,19 +453,19 @@ body {
 .favorite-item {
     position: relative;
     background: var(--card-bg);
-    border-radius: 12px;
+    border: 1px solid var(--card-border);
+    border-radius: 2px;
     padding: 14px 16px;
-    box-shadow: var(--shadow);
     display: flex;
     align-items: center;
     gap: 12px;
     cursor: pointer;
-    transition: transform 0.2s, box-shadow 0.2s;
+    transition: border-color 0.15s ease;
     min-height: 68px;
 }
 
 .favorite-item:active {
-    transform: scale(0.98);
+    border-color: var(--mta-blue);
 }
 
 .favorite-item.edit-mode {
@@ -475,14 +521,14 @@ body {
     align-items: center;
     gap: 12px;
     padding: 16px;
-    border: 2px dashed var(--text-secondary);
+    border: 2px dashed var(--text-muted);
     background: transparent;
     cursor: pointer;
 }
 
 .favorite-add-list:active {
     transform: scale(0.98);
-    background: rgba(0, 0, 0, 0.02);
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .favorite-add-icon {
@@ -514,12 +560,12 @@ body {
 .btn-secondary,
 .btn-danger {
     border: none;
-    border-radius: 14px;
+    border-radius: 4px;
     font-size: 16px;
     font-weight: 600;
     padding: 16px;
     cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: all 0.15s ease;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -539,15 +585,16 @@ body {
 
 .btn-secondary {
     width: 56px;
-    background: var(--card-bg);
+    background: var(--bg-panel);
     color: var(--text);
-    box-shadow: var(--shadow);
+    border: 1px solid var(--card-border);
     font-size: 24px;
     line-height: 1;
 }
 
 .btn-secondary:active {
     transform: scale(0.96);
+    border-color: var(--mta-blue);
 }
 
 .btn-danger {
@@ -582,7 +629,7 @@ body {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: rgba(0, 0, 0, 0.6);
     opacity: 0;
     transition: opacity 0.3s;
 }
@@ -597,8 +644,9 @@ body {
     left: 0;
     right: 0;
     max-height: 90vh;
-    background: var(--card-bg);
-    border-radius: 20px 20px 0 0;
+    background: var(--bg-elevated);
+    border-radius: 8px 8px 0 0;
+    border-top: 2px solid var(--mta-blue);
     padding: 20px;
     padding-bottom: calc(env(safe-area-inset-bottom, 0) + 20px);
     transform: translateY(100%);
@@ -616,7 +664,7 @@ body {
 .bottom-sheet-handle {
     width: 36px;
     height: 5px;
-    background: var(--text-secondary);
+    background: var(--text-muted);
     border-radius: 3px;
     margin: 0 auto 16px;
     opacity: 0.3;
@@ -633,13 +681,14 @@ body {
     font-size: 24px;
     font-weight: 700;
     margin: 0;
+    color: var(--text);
 }
 
 .btn-icon {
     width: 36px;
     height: 36px;
     border: none;
-    background: var(--bg);
+    background: var(--bg-panel);
     border-radius: 50%;
     font-size: 24px;
     cursor: pointer;
@@ -671,11 +720,11 @@ body {
 }
 
 .filter-label {
-    font-size: 12px;
-    font-weight: 600;
+    font-size: 11px;
+    font-weight: 700;
     color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 1px;
     margin-right: 8px;
     display: inline-block;
 }
@@ -708,15 +757,15 @@ body {
     align-items: center;
     gap: 6px;
     padding: 6px 12px;
-    border: 1.5px solid var(--text-secondary);
+    border: 1.5px solid var(--card-border);
     background: transparent;
     color: var(--text);
-    border-radius: 20px;
+    border-radius: 14px;
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     white-space: nowrap;
-    transition: all 0.2s;
+    transition: all 0.15s ease;
 }
 
 .filter-chip:active {
@@ -736,24 +785,26 @@ body {
 .search-box input {
     width: 100%;
     padding: 14px 16px;
-    border: none;
-    background: var(--bg);
-    border-radius: 12px;
+    border: 1px solid var(--card-border);
+    background: var(--bg-panel);
+    border-radius: 4px;
     font-size: 16px;
     color: var(--text);
 }
 
 .search-box input:focus {
     outline: 2px solid var(--mta-blue);
+    border-color: transparent;
+    box-shadow: 0 0 0 4px var(--mta-blue-glow);
 }
 
 /* ========== RECENT STATIONS ========== */
 .recent-header {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 11px;
+    font-weight: 700;
     color: var(--text-secondary);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 1px;
     margin: 0 0 8px 0;
     padding: 0 4px;
 }
@@ -773,8 +824,7 @@ body {
 
 .recent-separator {
     height: 1px;
-    background: var(--text-secondary);
-    opacity: 0.2;
+    background: var(--card-border);
     margin: 12px 0;
 }
 
@@ -789,15 +839,16 @@ body {
 
 .station-item {
     padding: 16px;
-    background: var(--bg);
-    border-radius: 12px;
+    background: var(--bg-panel);
+    border: 1px solid var(--card-border);
+    border-radius: 2px;
     cursor: pointer;
-    transition: transform 0.1s;
+    transition: border-color 0.1s ease;
 }
 
 .station-item:active {
-    transform: scale(0.98);
-    background: #E8E8ED;
+    border-color: var(--mta-blue);
+    background: #222222;
 }
 
 .station-item-name {
@@ -851,7 +902,7 @@ body {
     height: 6px;
     -webkit-appearance: none;
     appearance: none;
-    background: var(--bg);
+    background: var(--card-border);
     border-radius: 3px;
     outline: none;
 }
@@ -864,7 +915,7 @@ body {
     background: var(--mta-blue);
     border-radius: 50%;
     cursor: pointer;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 0 0 4px var(--mta-blue-glow);
 }
 
 .setting-item input[type="range"]::-moz-range-thumb {
@@ -874,6 +925,7 @@ body {
     border-radius: 50%;
     cursor: pointer;
     border: none;
+    box-shadow: 0 0 0 4px var(--mta-blue-glow);
 }
 
 .setting-item span {
@@ -887,7 +939,7 @@ body {
     font-weight: 500;
 }
 
-/* iOS-style switch */
+/* Toggle switch */
 .switch {
     position: relative;
     display: inline-block;
@@ -908,7 +960,7 @@ body {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #ccc;
+    background-color: var(--card-border);
     transition: 0.3s;
     border-radius: 31px;
 }
@@ -920,7 +972,7 @@ body {
     width: 27px;
     left: 2px;
     bottom: 2px;
-    background-color: white;
+    background-color: var(--text);
     transition: 0.3s;
     border-radius: 50%;
 }
@@ -957,7 +1009,7 @@ input:checked + .slider:before {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: rgba(0, 0, 0, 0.6);
     opacity: 0;
     transition: opacity 0.3s;
 }
@@ -968,8 +1020,9 @@ input:checked + .slider:before {
 
 .dialog-content {
     position: relative;
-    background: var(--card-bg);
-    border-radius: 20px;
+    background: var(--bg-elevated);
+    border-top: 2px solid var(--mta-blue);
+    border-radius: 6px;
     padding: 24px;
     margin: 20px;
     max-width: 320px;
@@ -993,8 +1046,10 @@ input:checked + .slider:before {
 .dialog-content input {
     width: 100%;
     padding: 12px;
-    border: 1px solid #E5E5EA;
-    border-radius: 10px;
+    border: 1px solid var(--card-border);
+    background: var(--bg-panel);
+    color: var(--text);
+    border-radius: 4px;
     font-size: 16px;
     margin-bottom: 16px;
 }
@@ -1002,6 +1057,7 @@ input:checked + .slider:before {
 .dialog-content input:focus {
     outline: 2px solid var(--mta-blue);
     border-color: transparent;
+    box-shadow: 0 0 0 4px var(--mta-blue-glow);
 }
 
 .dialog-actions {
@@ -1039,71 +1095,6 @@ input:checked + .slider:before {
     }
 }
 
-/* ========== DARK MODE SUPPORT ========== */
-@media (prefers-color-scheme: dark) {
-    :root {
-        --bg: #000000;
-        --text: #FFFFFF;
-        --text-secondary: #A1A1A6;
-        --card-bg: #1C1C1E;
-    }
-
-    .station-name {
-        color: #FFFFFF;
-        text-shadow: none;
-    }
-
-    .search-box input,
-    .station-item {
-        background: #2C2C2E;
-        color: #FFFFFF;
-    }
-
-    .station-item-name {
-        color: #FFFFFF;
-    }
-
-    .station-item:active {
-        background: #3A3A3C;
-    }
-
-    .btn-secondary {
-        background: #2C2C2E;
-    }
-
-    .btn-icon {
-        background: #2C2C2E;
-        color: #FFFFFF;
-    }
-
-    .bottom-actions {
-        background: linear-gradient(to top, #000000 80%, transparent);
-    }
-
-    .bottom-sheet-header h2,
-    .setting-item label {
-        color: #FFFFFF;
-    }
-
-    .alert-item {
-        background: #3A3A00;
-        color: #FFCC00;
-    }
-
-    .favorites-search input {
-        background: #2C2C2E;
-        color: #FFFFFF;
-    }
-
-    .favorite-item-name {
-        color: #FFFFFF;
-    }
-
-    .favorite-add-list {
-        border-color: #A1A1A6;
-    }
-}
-
 /* ========== LANDSCAPE MODE ========== */
 @media (orientation: landscape) and (max-height: 500px) {
     .station-hero {
@@ -1119,14 +1110,15 @@ input:checked + .slider:before {
     }
 }
 
-/* ========== HIGH CONTRAST FOR SUNLIGHT ========== */
+/* ========== HIGH CONTRAST ========== */
 @media (prefers-contrast: high) {
     .station-name {
-        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        text-shadow: 0 1px 2px rgba(255, 255, 255, 0.3);
         font-weight: 800;
     }
 
     .route-badge {
-        box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
+        outline: 2px solid #FFFFFF;
+        outline-offset: 1px;
     }
 }
