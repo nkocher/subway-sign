@@ -1,5 +1,5 @@
 // NYC Subway Sign Control - Service Worker
-const CACHE_NAME = 'subway-sign-v1';
+const CACHE_NAME = 'subway-sign-v2';
 const urlsToCache = [
   '/',
   '/static/style.css',

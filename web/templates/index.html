@@ -6,12 +6,12 @@
     <title>Subway Sign</title>
 
     <!-- PWA Meta Tags -->
-    <meta name="theme-color" content="#0039A6">
+    <meta name="theme-color" content="#0A0A0A">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Subway Sign">
     <link rel="manifest" href="/static/manifest.json">
-    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Ccircle cx='96' cy='96' r='88' fill='%230039A6'/%3E%3Ctext x='96' y='130' font-size='100' font-family='Arial' font-weight='bold' text-anchor='middle' fill='white'%3EM%3C/text%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Ccircle cx='96' cy='96' r='88' fill='%230A0A0A'/%3E%3Ctext x='96' y='130' font-size='100' font-family='Arial' font-weight='bold' text-anchor='middle' fill='white'%3EM%3C/text%3E%3C/svg%3E">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
@@ -23,6 +23,7 @@
     <div id="mainView" class="main-view">
         <!-- Current Station Display (Hero Section) -->
         <div class="station-hero" id="stationHero">
+            <div class="station-hero-label">Current Station</div>
             <div class="station-name" id="heroStationName">Loading...</div>
             <div class="station-routes" id="heroRoutes"></div>
             <div class="station-alerts" id="heroAlerts"></div>
