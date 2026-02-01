@@ -12,6 +12,8 @@ Supports three station configuration formats:
 import os
 import sys
 import json
+import subprocess
+import time as _time
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, render_template, jsonify, request, send_from_directory
@@ -156,42 +158,40 @@ def load_stations():
         return {"stations": []}
 
 
-def get_display_status():
-    """Check if the display service is running"""
+# Simple TTL cache for subprocess results to avoid spawning processes on every poll
+_subprocess_cache = {}
+_SUBPROCESS_CACHE_TTL = 10  # seconds
+
+
+def _cached_subprocess(key, cmd):
+    """Run a subprocess with 10-second TTL caching."""
+    now = _time.monotonic()
+    entry = _subprocess_cache.get(key)
+    if entry and now - entry[1] < _SUBPROCESS_CACHE_TTL:
+        return entry[0]
     try:
-        import subprocess
-        result = subprocess.run(
-            ['systemctl', 'is-active', 'subway-sign.service'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        return result.stdout.strip()
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        value = result.stdout.strip()
     except Exception:
-        return 'unknown'
+        value = 'unknown'
+    _subprocess_cache[key] = (value, now)
+    return value
+
+
+def get_display_status():
+    """Check if the display service is running (cached 10s)."""
+    return _cached_subprocess('display_status', ['systemctl', 'is-active', 'subway-sign.service'])
 
 
 def get_system_uptime():
-    """Get system uptime"""
-    try:
-        import subprocess
-        result = subprocess.run(
-            ['uptime', '-p'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        return result.stdout.strip().replace('up ', '')
-    except Exception:
-        return 'unknown'
+    """Get system uptime (cached 10s)."""
+    value = _cached_subprocess('uptime', ['uptime', '-p'])
+    return value.replace('up ', '') if value != 'unknown' else value
 
 
 def restart_display_service():
     """Restart the display service (requires sudo privileges)"""
     try:
-        import subprocess
-        import time
-
         # Fire the restart command without waiting for full completion
         # Use start_new_session=True to prevent zombie processes
         proc = subprocess.Popen(
@@ -202,7 +202,7 @@ def restart_display_service():
         )
 
         # Give it a moment to begin restarting
-        time.sleep(1)
+        _time.sleep(1)
 
         # Reap the process if it's done (non-blocking)
         proc.poll()

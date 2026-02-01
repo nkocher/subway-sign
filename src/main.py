@@ -17,6 +17,7 @@ import queue
 import threading
 import os
 import sys
+import signal
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -152,6 +153,7 @@ def fetch_loop(client: MTAClient, config_holder: ConfigHolder, snapshot_queue: q
     last_train_fetch = 0
     last_alert_fetch = 0
     cached_alerts = []  # Keep alerts between fetches
+    last_train_count = -1  # Track for change-only logging
 
     TRAIN_INTERVAL = 20  # seconds
     ALERT_INTERVAL = 60  # seconds
@@ -200,9 +202,11 @@ def fetch_loop(client: MTAClient, config_holder: ConfigHolder, snapshot_queue: q
                 except (queue.Empty, queue.Full):
                     pass
 
-            uptown = len([t for t in trains if t.direction == "N"])
-            downtown = len([t for t in trains if t.direction == "S"])
-            print(f"[FETCH] Updated: {len(trains)} trains ({uptown}N, {downtown}S), {len(cached_alerts)} alerts")
+            if len(trains) != last_train_count:
+                uptown = len([t for t in trains if t.direction == "N"])
+                downtown = len([t for t in trains if t.direction == "S"])
+                print(f"[FETCH] {len(trains)} trains ({uptown}N, {downtown}S), {len(cached_alerts)} alerts")
+                last_train_count = len(trains)
 
         # Sleep for a bit
         time.sleep(1.0)
@@ -426,18 +430,12 @@ def main():
 
         alert_manager.periodic_cleanup()
 
-        if current_time - last_stats_time >= 30.0:
+        if current_time - last_stats_time >= 300.0:
             fps = frame_count / (current_time - last_stats_time)
             uptown_count = len([t for t in current_snapshot.trains if t.direction == "N"])
             downtown_count = len([t for t in current_snapshot.trains if t.direction == "S"])
 
-            print(f"\n{'='*60}")
-            print(f"[STATS] Runtime: {int(current_time - last_stats_time)}s interval")
-            print(f"  FPS: {fps:.1f} / 30.0 target")
-            print(f"  Trains: {len(current_snapshot.trains)} total ({uptown_count} uptown, {downtown_count} downtown)")
-            print(f"  Alerts: {alert_manager.queue_size} in queue (showing: {show_alert})")
-            print(f"  Data age: {current_time - current_snapshot.fetched_at:.1f}s")
-            print(f"{'='*60}\n")
+            print(f"[STATS] FPS: {fps:.1f} | Trains: {len(current_snapshot.trains)} ({uptown_count}N {downtown_count}S) | Alerts: {alert_manager.queue_size} | Age: {current_time - current_snapshot.fetched_at:.1f}s")
 
             frame_count = 0
             last_stats_time = current_time
@@ -450,14 +448,22 @@ def main():
             print(f"[WARN] Slow frame: {elapsed*1000:.1f}ms")
 
 
+def _shutdown(signum=None, frame=None):
+    """Graceful shutdown handler for SIGTERM and SIGINT."""
+    sig_name = signal.Signals(signum).name if signum else "unknown"
+    print(f"\n\nShutting down gracefully ({sig_name})...")
+    if _client:
+        _client.close()
+    sys.exit(0)
+
+
 if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, _shutdown)
+
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\nShutting down gracefully...")
-        if _client:
-            _client.close()
-        sys.exit(0)
+        _shutdown(signal.SIGINT)
     except Exception as e:
         print(f"\n\nFATAL ERROR: {e}")
         import traceback

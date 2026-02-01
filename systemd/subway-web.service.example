@@ -7,11 +7,21 @@ Wants=network-online.target
 Type=simple
 User=YOUR_USERNAME
 WorkingDirectory=/home/YOUR_USERNAME/subway-sign/web
-ExecStart=/usr/bin/python3 /home/YOUR_USERNAME/subway-sign/web/app.py
+# Adjust path: /usr/bin/gunicorn (apt install) or /home/YOUR_USERNAME/.local/bin/gunicorn (pip install)
+ExecStart=/usr/bin/gunicorn --bind 0.0.0.0:5001 --workers 2 --timeout 30 --max-requests 1000 --max-requests-jitter 50 app:app
 Restart=always
 RestartSec=5
+TimeoutStopSec=10
 StandardOutput=journal
 StandardError=journal
+
+# Resource limits (sacrifice web before display/ssh)
+MemoryMax=256M
+OOMScoreAdjust=500
+
+# Log rate limiting
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=100
 
 # Environment
 Environment=PYTHONUNBUFFERED=1

@@ -25,6 +25,9 @@ from .alert_manager import extract_priority_from_effect
 CACHE_TTL_SECONDS = 300  # 5 minutes
 
 
+_ERROR_LOG_INTERVAL = 300  # Only log same error source every 5 minutes
+
+
 class MTAClient:
     """
     MTA API client with robust error handling and caching.
@@ -40,6 +43,7 @@ class MTAClient:
         self._alerts_cache = {}  # {route: [alerts]}
         self._alerts_etag = None
         self._backoff = {}  # {feed_id: {failures: int, retry_after: float}}
+        self._last_error_log = {}  # {source_key: timestamp} for rate-limited logging
         # Reuse a single ThreadPoolExecutor instead of creating one per fetch
         self._executor = ThreadPoolExecutor(max_workers=8)
 
@@ -60,8 +64,8 @@ class MTAClient:
         )
 
         adapter = HTTPAdapter(
-            pool_connections=10,
-            pool_maxsize=20,
+            pool_connections=4,
+            pool_maxsize=8,
             max_retries=retry_strategy
         )
 
@@ -102,7 +106,7 @@ class MTAClient:
                 feed_trains = future.result()
                 all_trains.extend(feed_trains)
             except Exception as e:
-                print(f"[MTA] Error in parallel fetch for feed {feed_id}: {e}")
+                self._log_error(f"parallel_{feed_id}", f"Error in parallel fetch for feed {feed_id}: {e}")
                 # Use cached data as fallback
                 all_trains.extend(self._get_cached_trains(feed_id))
 
@@ -196,7 +200,7 @@ class MTAClient:
             return feed_trains
 
         except Exception as e:
-            print(f"[MTA] Error fetching feed {feed_id}: {e}")
+            self._log_error(f"feed_{feed_id}", f"Error fetching feed {feed_id}: {e}")
             self._record_failure(feed_id)
             # Use cached data as fallback
             return self._get_cached_trains(feed_id)
@@ -285,7 +289,7 @@ class MTAClient:
             return alert_objects
 
         except Exception as e:
-            print(f"[MTA] Error fetching alerts: {e}")
+            self._log_error("alerts", f"Error fetching alerts: {e}")
             self._record_failure(feed_id)
             return self._get_cached_alerts(routes)
 
@@ -377,6 +381,13 @@ class MTAClient:
                     ))
         return alert_objects
 
+    def _log_error(self, source: str, msg: str) -> None:
+        """Rate-limited error logging (one message per source per 5 minutes)."""
+        now = time.time()
+        if now - self._last_error_log.get(source, 0) >= _ERROR_LOG_INTERVAL:
+            print(f"[MTA] {msg}")
+            self._last_error_log[source] = now
+
     def _cleanup_feed_cache(self) -> None:
         """Remove stale feed cache entries to prevent memory growth."""
         cutoff = time.time() - CACHE_TTL_SECONDS
@@ -390,6 +401,6 @@ class MTAClient:
     def close(self) -> None:
         """Clean up resources. Call when shutting down."""
         if self._executor:
-            self._executor.shutdown(wait=False)
+            self._executor.shutdown(wait=True, cancel_futures=True)
         if self._session:
             self._session.close()
