@@ -9,7 +9,9 @@ pub struct Station {
     pub name: String,
     pub stop_ids: Vec<String>,
     pub routes: Vec<String>,
+    #[allow(dead_code)]
     pub lat: f64,
+    #[allow(dead_code)]
     pub lon: f64,
     pub borough: String,
     pub platform_count: u32,
@@ -138,44 +140,6 @@ pub fn get_station_database() -> &'static [Station] {
     &get_db().stations
 }
 
-/// Find stations with names matching a query, ranked by word overlap.
-pub fn find_similar_stations(query: &str, max_results: usize) -> Vec<String> {
-    let db = get_db();
-    let query_lower = query.to_lowercase();
-    let query_replaced = query_lower.replace('-', " ");
-    let query_words: std::collections::HashSet<&str> =
-        query_replaced.split_whitespace().collect();
-
-    let mut matches: Vec<(f64, &str)> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-
-    for station in &db.stations {
-        if !seen.insert(&station.name) {
-            continue;
-        }
-        let name_lower = station.name.to_lowercase();
-        let name_replaced = name_lower.replace('-', " ");
-        let name_words: std::collections::HashSet<&str> =
-            name_replaced.split_whitespace().collect();
-
-        let common = query_words.intersection(&name_words).count();
-        if common > 0 {
-            let score =
-                common as f64 / query_words.len().max(name_words.len()) as f64;
-            if score > 0.2 {
-                matches.push((score, &station.name));
-            }
-        }
-    }
-
-    matches.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-    matches
-        .into_iter()
-        .take(max_results)
-        .map(|(_, name)| name.to_string())
-        .collect()
-}
-
 /// Look up station name from a stop ID (e.g., "635N" → "Times Sq-42 St").
 ///
 /// Strips the N/S direction suffix before matching.
@@ -235,13 +199,6 @@ mod tests {
     fn test_unknown_station() {
         let ids = get_stop_ids_for_station("Nonexistent Station XYZ");
         assert!(ids.is_empty());
-    }
-
-    #[test]
-    fn test_find_similar_stations() {
-        let results = find_similar_stations("42", 5);
-        assert!(!results.is_empty(), "should find stations containing '42'");
-        assert!(results.len() <= 5);
     }
 
     #[test]

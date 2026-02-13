@@ -1,3 +1,24 @@
+//! LED matrix display abstraction with hardware FFI.
+//!
+//! The hardware path uses hzeller's `set_image()` C API for bulk pixel transfer.
+//! This is a direct FFI call to the rpi-rgb-led-matrix library that copies an
+//! entire RGB framebuffer to the LED canvas in one operation, reducing per-frame
+//! FFI overhead from 6,144 calls (one per pixel in 192x32) to 1.
+//!
+//! ## LedCanvas layout assumption
+//!
+//! `LedCanvas` (from the `rpi-led-matrix` crate) is a newtype wrapping a raw
+//! `*mut CLedCanvas` pointer. We extract this pointer via transmute-style casting
+//! to pass it to the C `set_image()` function. A `debug_assert_eq!` on
+//! `size_of::<LedCanvas>()` guards against crate updates that change the layout.
+//!
+//! ## `unsafe impl Send` justification
+//!
+//! `LedMatrixDisplay` is created, used, and destroyed entirely within one
+//! dedicated render thread (`std::thread::spawn` in `main.rs`). It is never
+//! shared across threads. The `Send` bound is required because `Box<dyn
+//! DisplayTarget>` is moved into that thread, but no concurrent access occurs.
+
 use super::framebuffer::FrameBuffer;
 
 /// Abstraction over the LED matrix hardware.
@@ -7,9 +28,6 @@ use super::framebuffer::FrameBuffer;
 pub trait DisplayTarget: Send {
     /// Push a rendered frame to the display.
     fn swap(&mut self, frame: &FrameBuffer);
-
-    /// Set display brightness (0-100).
-    fn set_brightness(&mut self, brightness: u8);
 }
 
 // ---------------------------------------------------------------------------
@@ -128,15 +146,6 @@ mod hw {
                 self.canvas = Some(self.matrix.swap(canvas));
             }
         }
-
-        fn set_brightness(&mut self, brightness: u8) {
-            // Brightness can only be set via LedMatrixOptions at init time
-            // with the rpi-led-matrix crate. Log the request for debugging.
-            tracing::warn!(
-                "Brightness change to {}% requested but requires matrix re-init (not supported at runtime)",
-                brightness
-            );
-        }
     }
 }
 
@@ -145,8 +154,6 @@ mod hw {
 // ---------------------------------------------------------------------------
 /// Mock display for development on macOS (no hardware).
 pub struct MockDisplay {
-    #[allow(dead_code)]
-    brightness: u8,
     frame_count: u64,
 }
 
@@ -157,7 +164,6 @@ impl MockDisplay {
             brightness
         );
         MockDisplay {
-            brightness,
             frame_count: 0,
         }
     }
@@ -166,10 +172,6 @@ impl MockDisplay {
 impl DisplayTarget for MockDisplay {
     fn swap(&mut self, _frame: &FrameBuffer) {
         self.frame_count += 1;
-    }
-
-    fn set_brightness(&mut self, brightness: u8) {
-        self.brightness = brightness;
     }
 }
 

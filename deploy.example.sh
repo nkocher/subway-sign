@@ -6,36 +6,36 @@
 #   PI_HOST: SSH user and IP/hostname of your Pi (e.g., admin@192.168.1.100)
 #   PI_PATH: Installation path on the Pi
 #
-# Build first:
-#   cargo build --release --target aarch64-unknown-linux-gnu --features hardware --no-default-features
+# The binary is built natively on the Pi:
+#   cargo build --release --features hardware --no-default-features
 
 set -e
 
 PI_HOST="YOUR_USERNAME@YOUR_PI_IP"
-PI_PATH="/home/YOUR_USERNAME/subway-sign"
+PI_PATH="/home/YOUR_USERNAME/subway-sign-rust"
 SERVICE_NAME="subway-sign-rust.service"
-BINARY="target/aarch64-unknown-linux-gnu/release/subway-sign"
 
 echo "=== Deploying NYC Subway Sign (Rust) ==="
 
-# Check that binary exists
-if [ ! -f "$BINARY" ]; then
-    echo "ERROR: Binary not found at $BINARY"
-    echo "Build first: cargo build --release --target aarch64-unknown-linux-gnu --features hardware --no-default-features"
-    exit 1
-fi
+# Sync source code to Pi
+echo "Syncing source to Pi..."
+rsync -az --delete \
+    --exclude target/ \
+    --exclude .git/ \
+    --exclude .worktrees/ \
+    --exclude deploy.sh \
+    ./ "${PI_HOST}:${PI_PATH}/"
 
-# Copy binary
-echo "Deploying binary to Pi..."
-scp "$BINARY" "${PI_HOST}:${PI_PATH}/subway-sign"
+# Build on Pi (native compilation)
+echo "Building on Pi..."
+ssh ${PI_HOST} "cd ${PI_PATH} && cargo build --release --features hardware --no-default-features"
 
 # Copy config if it doesn't exist on Pi
-ssh ${PI_HOST} "test -f ${PI_PATH}/config.json || echo '{}' > ${PI_PATH}/config.json"
+ssh ${PI_HOST} "test -f ${PI_PATH}/config.json || cp ${PI_PATH}/config.example.json ${PI_PATH}/config.json"
 
-# Install/update systemd service (single service replaces two Python services)
+# Install/update systemd service
 echo "Updating systemd service..."
-scp systemd/subway-sign-rust.service "${PI_HOST}:/tmp/subway-sign-rust.service"
-ssh ${PI_HOST} "sudo mv /tmp/subway-sign-rust.service /etc/systemd/system/ && sudo systemctl daemon-reload"
+ssh ${PI_HOST} "sudo cp ${PI_PATH}/systemd/subway-sign-rust.service.example /etc/systemd/system/subway-sign-rust.service && sudo systemctl daemon-reload"
 
 # Restart service
 echo "Restarting ${SERVICE_NAME}..."

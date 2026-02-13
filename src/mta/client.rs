@@ -28,7 +28,6 @@ const ALERTS_URL: &str =
 /// Cached feed data.
 struct FeedCacheEntry {
     trains: Vec<Train>,
-    timestamp: u64,
     fetched_at: Instant,
 }
 
@@ -106,13 +105,12 @@ impl MtaClient {
         // Collect results
         while let Some(result) = join_set.join_next().await {
             match result {
-                Ok((url, Ok((trains, timestamp)))) => {
+                Ok((url, Ok((trains, _timestamp)))) => {
                     self.record_success(&url);
                     self.feed_cache.insert(
                         url,
                         FeedCacheEntry {
                             trains: trains.clone(),
-                            timestamp,
                             fetched_at: Instant::now(),
                         },
                     );

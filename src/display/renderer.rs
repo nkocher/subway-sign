@@ -25,7 +25,7 @@ pub struct Renderer {
     last_alert_width: i32,
     /// Cached alert rendering: (text, affected_routes_key) → pre-rendered pixels.
     alert_cache: Option<AlertCacheEntry>,
-    /// Regex for matching [route] patterns in alert text.
+    /// Regex for matching `[route]` patterns in alert text.
     route_pattern: Regex,
 }
 
@@ -178,7 +178,7 @@ impl Renderer {
         DISPLAY_WIDTH as i32 + self.last_alert_width + 10
     }
 
-    /// Render alert text with inline route icons for [route] patterns.
+    /// Render alert text with inline route icons for `[route]` patterns.
     fn render_alert_with_icons(
         &self,
         text: &str,

@@ -30,12 +30,14 @@ pub struct RouteIcon {
     /// Pixel data: row-major, each pixel is (r, g, b, a).
     pub pixels: Vec<Vec<(u8, u8, u8, u8)>>,
     pub width: usize,
+    #[allow(dead_code)]
     pub height: usize,
     pub baseline_offset: i32,
+    #[allow(dead_code)]
     pub color: Rgb,
 }
 
-/// Character bitmap: one Vec<bool> per row, LSB-first decoded.
+/// Character bitmap: one `Vec<bool>` per row, LSB-first decoded.
 pub type CharBitmap = Vec<Vec<bool>>;
 
 /// The MTA bitmap font with character glyphs and route icons.
@@ -271,15 +273,6 @@ impl MtaFont {
         })
     }
 
-    /// Check if a character exists in the font.
-    pub fn has_char(&self, ch: char) -> bool {
-        self.chars.contains_key(&ch)
-    }
-
-    /// Get all available route icon names.
-    pub fn icon_names(&self) -> Vec<&String> {
-        self.route_icons.keys().collect()
-    }
 }
 
 #[cfg(test)]
@@ -289,10 +282,10 @@ mod tests {
     #[test]
     fn test_font_loads() {
         let font = get_font();
-        assert!(font.has_char('A'));
-        assert!(font.has_char('0'));
-        assert!(font.has_char(' '));
-        assert!(!font.has_char('\u{FFFF}')); // unlikely to exist
+        assert!(font.get_char_bitmap('A', false).is_some());
+        assert!(font.get_char_bitmap('0', false).is_some());
+        assert!(font.get_char_bitmap(' ', false).is_some());
+        assert!(font.get_char_bitmap('\u{FFFF}', false).is_none());
     }
 
     #[test]
@@ -361,9 +354,6 @@ mod tests {
     #[test]
     fn test_route_icons_loaded() {
         let font = get_font();
-        let names = font.icon_names();
-        assert!(!names.is_empty(), "should have route icons");
-        // Check specific icons
         assert!(
             font.get_route_icon("1", false).is_some(),
             "should have route 1 circle"

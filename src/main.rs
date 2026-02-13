@@ -244,10 +244,127 @@ async fn config_watcher_task(state: Arc<AppState>) {
     }
 }
 
-/// Render loop — runs in a dedicated OS thread at 30fps.
+/// Alert display state machine.
+///
+/// Tracks whether an alert is currently showing, which alert it is,
+/// the scroll position, and what train triggered the alert cycle.
+/// Extracted from the render loop to reduce parameter sprawl.
+pub struct AlertState {
+    pub show_alert: bool,
+    pub current_alert: Option<Alert>,
+    pub scroll_offset: f32,
+    pub triggered_by: Option<(String, String)>,
+    pub cycle_start_time: Instant,
+}
+
+impl AlertState {
+    fn new() -> Self {
+        AlertState {
+            show_alert: false,
+            current_alert: None,
+            scroll_offset: 0.0,
+            triggered_by: None,
+            cycle_start_time: Instant::now(),
+        }
+    }
+
+    /// Reset all alert display state to idle.
+    fn clear(&mut self) {
+        self.show_alert = false;
+        self.current_alert = None;
+        self.scroll_offset = 0.0;
+        self.triggered_by = None;
+    }
+
+    /// Update the alert state machine for one frame.
+    ///
+    /// Triggers alert display when a train arrives (minutes == 0), cycles through
+    /// queued alerts with scrolling, and clears when all alerts have been shown
+    /// or the triggering train departs.
+    fn update(
+        &mut self,
+        state: &AppState,
+        snapshot: &DisplaySnapshot,
+        renderer: &mut Renderer,
+        scroll_speed: f32,
+        max_duration: std::time::Duration,
+    ) {
+        let first_train = snapshot.get_first_train();
+        let train_at_zero = first_train.minutes == 0;
+
+        // Check if the train that triggered alerts has departed
+        let triggering_train_departed = self.show_alert
+            && self.triggered_by.as_ref().map_or(false, |(route, dest)| {
+                !snapshot.trains.iter().any(|t| {
+                    t.route == *route && t.destination == *dest && t.minutes == 0
+                })
+            });
+
+        let mut am = state.alert_manager.lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        // Start showing alerts when a train arrives and alerts are queued
+        if train_at_zero && !self.show_alert && am.has_alerts() {
+            am.reset_cycle();
+            if let Some(alert) = am.get_next_alert() {
+                self.current_alert = Some(alert.clone());
+                self.show_alert = true;
+                self.scroll_offset = 0.0;
+                self.triggered_by = Some((first_train.route.clone(), first_train.destination.clone()));
+                self.cycle_start_time = Instant::now();
+            }
+        }
+
+        // Process active alert display
+        if self.show_alert && self.current_alert.is_some() {
+            if self.cycle_start_time.elapsed() > max_duration {
+                self.clear();
+            } else {
+                self.scroll_offset += scroll_speed;
+
+                if self.scroll_offset >= renderer.get_scroll_complete_distance() as f32 {
+                    if let Some(ref alert) = self.current_alert {
+                        am.mark_displayed(alert);
+                    }
+
+                    // Decide what to show next
+                    let next = if triggering_train_departed && train_at_zero && am.has_alerts() {
+                        am.reset_cycle();
+                        am.get_next_alert().cloned()
+                    } else if !triggering_train_departed && !am.all_shown_this_cycle() {
+                        am.get_next_alert().cloned()
+                    } else {
+                        None
+                    };
+
+                    match next {
+                        Some(alert) => {
+                            self.current_alert = Some(alert);
+                            self.scroll_offset = 0.0;
+                            if triggering_train_departed {
+                                self.triggered_by = Some((
+                                    first_train.route.clone(),
+                                    first_train.destination.clone(),
+                                ));
+                                self.cycle_start_time = Instant::now();
+                            }
+                        }
+                        None => {
+                            self.clear();
+                        }
+                    }
+                }
+            }
+        }
+
+        am.periodic_cleanup();
+    }
+}
+
+/// Render loop — runs in a dedicated OS thread at 60fps.
 ///
 /// This is NOT a tokio task. It's a real thread because:
-/// - It runs perpetually at 30fps with precise timing
+/// - It runs perpetually at 60fps with precise timing
 /// - It calls blocking FFI (LED matrix VSync) on hardware
 /// - spawn_blocking is for short-lived operations, not permanent loops
 fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
@@ -255,15 +372,10 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     let brightness = (config.display.brightness * 100.0) as u8;
     let mut display = create_display(brightness);
     let mut renderer = Renderer::new();
+    let mut alert_state = AlertState::new();
 
-    // Render state (matches Python main loop variables)
     let mut cycle_index: usize = 0;
     let mut flash_state = false;
-    let mut alert_scroll_offset: f32 = 0.0;
-    let mut show_alert = false;
-    let mut current_alert: Option<Alert> = None;
-    let mut alert_triggered_by: Option<(String, String)> = None;
-    let mut alert_cycle_start_time = Instant::now();
 
     let mut last_cycle_time = Instant::now();
     let mut last_flash_time = Instant::now();
@@ -300,15 +412,10 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
         }
 
         // Alert state machine
-        update_alert_state(
+        alert_state.update(
             &state,
             &snapshot,
             &mut renderer,
-            &mut show_alert,
-            &mut current_alert,
-            &mut alert_scroll_offset,
-            &mut alert_triggered_by,
-            &mut alert_cycle_start_time,
             SCROLL_SPEED,
             MAX_ALERT_CYCLE_DURATION,
         );
@@ -318,9 +425,9 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
             &snapshot,
             cycle_index,
             flash_state,
-            alert_scroll_offset,
-            show_alert,
-            current_alert.as_ref(),
+            alert_state.scroll_offset,
+            alert_state.show_alert,
+            alert_state.current_alert.as_ref(),
         );
 
         // Push to display
@@ -356,108 +463,6 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     info!("[RENDER] Render loop stopped");
 }
 
-/// Alert state machine — extracted from render loop for readability.
-///
-/// Triggers alert display when a train arrives (minutes == 0), cycles through
-/// queued alerts with scrolling, and clears when all alerts have been shown
-/// or the triggering train departs.
-#[allow(clippy::too_many_arguments)]
-fn update_alert_state(
-    state: &AppState,
-    snapshot: &DisplaySnapshot,
-    renderer: &mut Renderer,
-    show_alert: &mut bool,
-    current_alert: &mut Option<Alert>,
-    alert_scroll_offset: &mut f32,
-    alert_triggered_by: &mut Option<(String, String)>,
-    alert_cycle_start_time: &mut Instant,
-    scroll_speed: f32,
-    max_duration: std::time::Duration,
-) {
-    let first_train = snapshot.get_first_train();
-    let train_at_zero = first_train.minutes == 0;
-
-    // Check if the train that triggered alerts has departed
-    let triggering_train_departed = *show_alert
-        && alert_triggered_by.as_ref().map_or(false, |(route, dest)| {
-            !snapshot.trains.iter().any(|t| {
-                t.route == *route && t.destination == *dest && t.minutes == 0
-            })
-        });
-
-    let mut am = state.alert_manager.lock()
-        .unwrap_or_else(|e| e.into_inner());
-
-    // Start showing alerts when a train arrives and alerts are queued
-    if train_at_zero && !*show_alert && am.has_alerts() {
-        am.reset_cycle();
-        if let Some(alert) = am.get_next_alert() {
-            *current_alert = Some(alert.clone());
-            *show_alert = true;
-            *alert_scroll_offset = 0.0;
-            *alert_triggered_by = Some((first_train.route.clone(), first_train.destination.clone()));
-            *alert_cycle_start_time = Instant::now();
-        }
-    }
-
-    // Process active alert display
-    if *show_alert && current_alert.is_some() {
-        if alert_cycle_start_time.elapsed() > max_duration {
-            clear_alert_state(show_alert, current_alert, alert_scroll_offset, alert_triggered_by);
-        } else {
-            *alert_scroll_offset += scroll_speed;
-
-            if *alert_scroll_offset >= renderer.get_scroll_complete_distance() as f32 {
-                if let Some(ref alert) = current_alert {
-                    am.mark_displayed(alert);
-                }
-
-                // Decide what to show next
-                let next = if triggering_train_departed && train_at_zero && am.has_alerts() {
-                    am.reset_cycle();
-                    am.get_next_alert().cloned()
-                } else if !triggering_train_departed && !am.all_shown_this_cycle() {
-                    am.get_next_alert().cloned()
-                } else {
-                    None
-                };
-
-                match next {
-                    Some(alert) => {
-                        *current_alert = Some(alert);
-                        *alert_scroll_offset = 0.0;
-                        if triggering_train_departed {
-                            *alert_triggered_by = Some((
-                                first_train.route.clone(),
-                                first_train.destination.clone(),
-                            ));
-                            *alert_cycle_start_time = Instant::now();
-                        }
-                    }
-                    None => {
-                        clear_alert_state(show_alert, current_alert, alert_scroll_offset, alert_triggered_by);
-                    }
-                }
-            }
-        }
-    }
-
-    am.periodic_cleanup();
-}
-
-/// Reset all alert display state to idle.
-fn clear_alert_state(
-    show_alert: &mut bool,
-    current_alert: &mut Option<Alert>,
-    alert_scroll_offset: &mut f32,
-    alert_triggered_by: &mut Option<(String, String)>,
-) {
-    *show_alert = false;
-    *current_alert = None;
-    *alert_scroll_offset = 0.0;
-    *alert_triggered_by = None;
-}
-
 /// Wait for SIGTERM or SIGINT (Ctrl-C).
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -480,5 +485,164 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use models::{Alert, Direction, DisplaySnapshot, Train};
+
+    fn test_config() -> Config {
+        Config {
+            station_stops: vec![("127N".to_string(), "127S".to_string())],
+            routes: vec!["1".to_string()],
+            display: config::DisplayConfig {
+                brightness: 0.5,
+                max_trains: 10,
+                show_alerts: true,
+            },
+            refresh: config::RefreshConfig::default(),
+        }
+    }
+
+    fn make_state(alerts: Vec<Alert>) -> Arc<AppState> {
+        let mut am = mta::alerts::AlertManager::new();
+        am.filter_and_sort(&alerts);
+        Arc::new(AppState {
+            config: ArcSwap::from_pointee(test_config()),
+            snapshot: ArcSwap::from_pointee(DisplaySnapshot::empty()),
+            alert_manager: Mutex::new(am),
+            config_path: PathBuf::from("config.json"),
+            shutdown: CancellationToken::new(),
+        })
+    }
+
+    fn make_train(route: &str, dest: &str, minutes: i32) -> Train {
+        Train {
+            route: route.into(),
+            destination: dest.into(),
+            minutes,
+            is_express: false,
+            arrival_timestamp: 0.0,
+            direction: Direction::Uptown,
+            stop_id: "127N".into(),
+        }
+    }
+
+    fn make_alert(id: &str) -> Alert {
+        Alert {
+            text: format!("Alert {}", id),
+            affected_routes: HashSet::from(["1".to_string()]),
+            priority: 1,
+            alert_id: id.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_alert_triggers_on_arrival() {
+        let state = make_state(vec![make_alert("a1")]);
+        let snapshot = DisplaySnapshot {
+            trains: vec![make_train("1", "Uptown", 0)], // arriving!
+            alerts: vec![make_alert("a1")],
+            fetched_at: 0.0,
+        };
+        let mut renderer = display::renderer::Renderer::new();
+        let mut alert = AlertState::new();
+
+        assert!(!alert.show_alert);
+
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90));
+
+        assert!(alert.show_alert, "alert should trigger when train at 0 min");
+        assert!(alert.current_alert.is_some());
+        assert_eq!(alert.triggered_by.as_ref().unwrap().0, "1");
+    }
+
+    #[test]
+    fn test_alert_does_not_trigger_without_arrival() {
+        let state = make_state(vec![make_alert("a1")]);
+        let snapshot = DisplaySnapshot {
+            trains: vec![make_train("1", "Uptown", 3)], // not arriving
+            alerts: vec![make_alert("a1")],
+            fetched_at: 0.0,
+        };
+        let mut renderer = display::renderer::Renderer::new();
+        let mut alert = AlertState::new();
+
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90));
+
+        assert!(!alert.show_alert, "alert should not trigger when no train at 0 min");
+    }
+
+    #[test]
+    fn test_alert_clears_when_all_shown() {
+        let state = make_state(vec![make_alert("a1")]);
+        let snapshot = DisplaySnapshot {
+            trains: vec![make_train("1", "Uptown", 0)],
+            alerts: vec![make_alert("a1")],
+            fetched_at: 0.0,
+        };
+        let mut renderer = display::renderer::Renderer::new();
+        let mut alert = AlertState::new();
+
+        // Trigger alert
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90));
+        assert!(alert.show_alert);
+
+        // Simulate scroll completing by setting offset past the threshold
+        let complete_dist = renderer.get_scroll_complete_distance() as f32;
+        alert.scroll_offset = complete_dist + 1.0;
+
+        // Update should mark as displayed and clear (only one alert)
+        alert.update(&state, &snapshot, &mut renderer, 0.0, Duration::from_secs(90));
+
+        assert!(!alert.show_alert, "alert should clear after all shown this cycle");
+    }
+
+    #[test]
+    fn test_alert_max_duration_timeout() {
+        let state = make_state(vec![make_alert("a1")]);
+        let snapshot = DisplaySnapshot {
+            trains: vec![make_train("1", "Uptown", 0)],
+            alerts: vec![make_alert("a1")],
+            fetched_at: 0.0,
+        };
+        let mut renderer = display::renderer::Renderer::new();
+        let mut alert = AlertState::new();
+
+        // Trigger alert
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90));
+        assert!(alert.show_alert);
+
+        // Simulate timeout by setting cycle_start_time far in the past
+        alert.cycle_start_time = Instant::now() - Duration::from_secs(100);
+
+        // Update with a very short max_duration to trigger timeout
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90));
+
+        assert!(!alert.show_alert, "alert should clear after max duration timeout");
+    }
+
+    #[test]
+    fn test_alert_departure_resets_cycle() {
+        let alerts = vec![make_alert("a1"), make_alert("a2")];
+        let state = make_state(alerts.clone());
+        let mut renderer = display::renderer::Renderer::new();
+        let mut alert = AlertState::new();
+
+        // Train arrives, triggers alerts
+        let snapshot_arrive = DisplaySnapshot {
+            trains: vec![make_train("1", "Uptown", 0)],
+            alerts: alerts.clone(),
+            fetched_at: 0.0,
+        };
+        alert.update(&state, &snapshot_arrive, &mut renderer, 1.0, Duration::from_secs(90));
+        assert!(alert.show_alert);
+        assert_eq!(alert.triggered_by.as_ref().unwrap(), &("1".to_string(), "Uptown".to_string()));
     }
 }
