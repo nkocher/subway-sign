@@ -536,6 +536,7 @@ async fn shutdown_signal() {
     let ctrl_c = async {
         if let Err(e) = signal::ctrl_c().await {
             error!("Failed to install Ctrl-C handler: {}", e);
+            std::future::pending::<()>().await;
         }
     };
 

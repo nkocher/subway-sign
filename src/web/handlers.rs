@@ -39,9 +39,9 @@ pub async fn update_config(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let json_str = serde_json::to_string_pretty(&body).unwrap_or_default();
+    let validated_json = serde_json::to_string_pretty(&body).unwrap_or_default();
 
-    let new_config = match Config::from_json(&json_str) {
+    let new_config = match Config::from_json(&validated_json) {
         Ok(cfg) => cfg,
         Err(e) => {
             return (
@@ -51,14 +51,10 @@ pub async fn update_config(
         }
     };
 
-    // Write the validated JSON (not the raw user payload) to strip unknown fields
-    let validated_json = serde_json::to_string_pretty(&body).unwrap_or_default();
-
     // Atomic write via spawn_blocking (sync fs ops: rename, sync_all)
     let write_result = tokio::task::spawn_blocking({
         let path = state.config_path.clone();
-        let json = validated_json.clone();
-        move || crate::config::atomic_write_config(&path, &json)
+        move || crate::config::atomic_write_config(&path, &validated_json)
     })
     .await;
 
