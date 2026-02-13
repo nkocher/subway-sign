@@ -259,7 +259,7 @@ pub struct AlertState {
 
 impl AlertState {
     fn new() -> Self {
-        AlertState {
+        Self {
             show_alert: false,
             current_alert: None,
             scroll_offset: 0.0,
@@ -294,7 +294,7 @@ impl AlertState {
 
         // Check if the train that triggered alerts has departed
         let triggering_train_departed = self.show_alert
-            && self.triggered_by.as_ref().map_or(false, |(route, dest)| {
+            && self.triggered_by.as_ref().is_some_and(|(route, dest)| {
                 !snapshot.trains.iter().any(|t| {
                     t.route == *route && t.destination == *dest && t.minutes == 0
                 })
@@ -319,41 +319,46 @@ impl AlertState {
         if self.show_alert && self.current_alert.is_some() {
             if self.cycle_start_time.elapsed() > max_duration {
                 self.clear();
+                am.periodic_cleanup();
+                return;
+            }
+
+            self.scroll_offset += scroll_speed;
+
+            let scroll_complete = self.scroll_offset >= renderer.get_scroll_complete_distance() as f32;
+            if !scroll_complete {
+                am.periodic_cleanup();
+                return;
+            }
+
+            // Current alert finished scrolling -- mark it displayed
+            if let Some(ref alert) = self.current_alert {
+                am.mark_displayed(alert);
+            }
+
+            // Decide what to show next
+            let next = if triggering_train_departed && train_at_zero && am.has_alerts() {
+                // Train departed but another arrived -- restart the cycle
+                am.reset_cycle();
+                am.get_next_alert().cloned()
+            } else if !triggering_train_departed && !am.all_shown_this_cycle() {
+                am.get_next_alert().cloned()
             } else {
-                self.scroll_offset += scroll_speed;
+                None
+            };
 
-                if self.scroll_offset >= renderer.get_scroll_complete_distance() as f32 {
-                    if let Some(ref alert) = self.current_alert {
-                        am.mark_displayed(alert);
-                    }
-
-                    // Decide what to show next
-                    let next = if triggering_train_departed && train_at_zero && am.has_alerts() {
-                        am.reset_cycle();
-                        am.get_next_alert().cloned()
-                    } else if !triggering_train_departed && !am.all_shown_this_cycle() {
-                        am.get_next_alert().cloned()
-                    } else {
-                        None
-                    };
-
-                    match next {
-                        Some(alert) => {
-                            self.current_alert = Some(alert);
-                            self.scroll_offset = 0.0;
-                            if triggering_train_departed {
-                                self.triggered_by = Some((
-                                    first_train.route.clone(),
-                                    first_train.destination.clone(),
-                                ));
-                                self.cycle_start_time = Instant::now();
-                            }
-                        }
-                        None => {
-                            self.clear();
-                        }
-                    }
+            if let Some(alert) = next {
+                self.current_alert = Some(alert);
+                self.scroll_offset = 0.0;
+                if triggering_train_departed {
+                    self.triggered_by = Some((
+                        first_train.route.clone(),
+                        first_train.destination.clone(),
+                    ));
+                    self.cycle_start_time = Instant::now();
                 }
+            } else {
+                self.clear();
             }
         }
 
@@ -491,8 +496,6 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
-    use std::sync::Arc;
     use std::time::Duration;
 
     use models::{Alert, Direction, DisplaySnapshot, Train};
