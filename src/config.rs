@@ -1,8 +1,35 @@
-use serde::Deserialize;
+use std::io::Write;
 use std::path::Path;
+
+use serde::Deserialize;
 
 use crate::models::{stop_ids_to_station_stops, StationStop};
 use crate::mta::stations;
+
+/// Atomically write config: write to .tmp, sync, backup existing to .bak, rename .tmp to primary.
+pub fn atomic_write_config(path: &Path, json: &str) -> Result<(), ConfigError> {
+    let tmp_path = path.with_extension("json.tmp");
+    let bak_path = path.with_extension("json.bak");
+
+    // Write to temp file and sync to disk
+    let mut file = std::fs::File::create(&tmp_path)
+        .map_err(|e| ConfigError::Io(format!("create tmp: {}", e)))?;
+    file.write_all(json.as_bytes())
+        .map_err(|e| ConfigError::Io(format!("write tmp: {}", e)))?;
+    file.sync_all()
+        .map_err(|e| ConfigError::Io(format!("sync tmp: {}", e)))?;
+
+    // Backup existing config (ignore error if no existing file)
+    if path.exists() {
+        let _ = std::fs::copy(path, &bak_path);
+    }
+
+    // Atomic rename (same filesystem guarantees atomicity)
+    std::fs::rename(&tmp_path, path)
+        .map_err(|e| ConfigError::Io(format!("rename tmp->config: {}", e)))?;
+
+    Ok(())
+}
 
 /// Top-level configuration file structure.
 #[derive(Debug, Deserialize)]
@@ -80,9 +107,35 @@ impl Config {
     /// 2. `stations`: Explicit list of `{uptown, downtown}` pairs
     /// 3. `uptown_stop_id`/`downtown_stop_id`: Legacy single platform
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        let contents = std::fs::read_to_string(path)
-            .map_err(|e| ConfigError::Io(e.to_string()))?;
-        Self::from_json(&contents)
+        let bak_path = path.with_extension("json.bak");
+
+        match std::fs::read_to_string(path) {
+            Ok(contents) => match Self::from_json(&contents) {
+                Ok(cfg) => return Ok(cfg),
+                Err(e) => {
+                    tracing::warn!("Primary config corrupt ({}), trying backup...", e);
+                }
+            },
+            Err(e) => {
+                tracing::warn!("Cannot read config ({}), trying backup...", e);
+            }
+        }
+
+        // Fallback to backup
+        if bak_path.exists() {
+            let contents = std::fs::read_to_string(&bak_path)
+                .map_err(|e| ConfigError::Io(format!("read backup: {}", e)))?;
+            let cfg = Self::from_json(&contents)?;
+            tracing::warn!("Loaded config from backup: {}", bak_path.display());
+            // Restore backup as primary
+            let _ = std::fs::copy(&bak_path, path);
+            return Ok(cfg);
+        }
+
+        Err(ConfigError::Io(format!(
+            "Cannot load config from {} or backup",
+            path.display()
+        )))
     }
 
     /// Parse config from a JSON string (useful for testing).
@@ -394,6 +447,57 @@ mod tests {
         }"#;
         let err = Config::from_json(json).unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_atomic_write_creates_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // Write initial config
+        std::fs::write(
+            &path,
+            r#"{"station":{"station_name":"Times Sq-42 St","routes":["1"]},"display":{"brightness":0.5,"max_trains":6,"show_alerts":true}}"#,
+        )
+        .unwrap();
+        // Atomic write new config
+        let new_json = r#"{"station":{"station_name":"14 St-Union Sq","routes":["4","5","6"]},"display":{"brightness":0.8,"max_trains":6,"show_alerts":true}}"#;
+        atomic_write_config(&path, new_json).unwrap();
+        // Verify backup exists with old content
+        let bak = path.with_extension("json.bak");
+        assert!(bak.exists());
+        assert!(std::fs::read_to_string(&bak).unwrap().contains("Times Sq"));
+        // Verify primary has new content
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("14 St-Union Sq")
+        );
+    }
+
+    #[test]
+    fn test_load_falls_back_to_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let bak = path.with_extension("json.bak");
+        // Write corrupted primary, valid backup
+        std::fs::write(&path, "NOT VALID JSON{{{").unwrap();
+        std::fs::write(
+            &bak,
+            r#"{"station":{"station_name":"Times Sq-42 St","routes":["1"]},"display":{"brightness":0.5,"max_trains":6,"show_alerts":true}}"#,
+        )
+        .unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.display.brightness, 0.5);
+    }
+
+    #[test]
+    fn test_load_fails_cleanly_when_both_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let bak = path.with_extension("json.bak");
+        std::fs::write(&path, "CORRUPT").unwrap();
+        std::fs::write(&bak, "ALSO CORRUPT").unwrap();
+        assert!(Config::load(&path).is_err());
     }
 
     #[test]

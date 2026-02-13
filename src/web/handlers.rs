@@ -54,10 +54,17 @@ pub async fn update_config(
     // Write the validated JSON (not the raw user payload) to strip unknown fields
     let validated_json = serde_json::to_string_pretty(&body).unwrap_or_default();
 
-    // Use tokio::fs to avoid blocking the async runtime on Pi SD card I/O
-    match tokio::fs::write(&state.config_path, &validated_json).await {
-        Ok(_) => {
-            info!("[WEB] Config saved");
+    // Atomic write via spawn_blocking (sync fs ops: rename, sync_all)
+    let write_result = tokio::task::spawn_blocking({
+        let path = state.config_path.clone();
+        let json = validated_json.clone();
+        move || crate::config::atomic_write_config(&path, &json)
+    })
+    .await;
+
+    match write_result {
+        Ok(Ok(_)) => {
+            info!("[WEB] Config saved (atomic)");
             state.config.store(Arc::new(new_config));
             state.config_changed.notify_one();
             (
@@ -68,11 +75,18 @@ pub async fn update_config(
                 })),
             )
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             warn!("[WEB] Failed to write config: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "success": false, "message": format!("Failed to save config: {}", e) })),
+            )
+        }
+        Err(e) => {
+            warn!("[WEB] Config write task failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "success": false, "message": format!("Config write failed: {}", e) })),
             )
         }
     }
