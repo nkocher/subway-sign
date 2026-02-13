@@ -24,6 +24,8 @@ struct StationDb {
     stations: Vec<Station>,
     /// Lookup index: normalized name → index into `stations`.
     index: HashMap<String, usize>,
+    /// Reverse lookup: base stop ID (without N/S suffix) → station name.
+    stop_id_to_name: HashMap<String, String>,
 }
 
 static STATION_DB: OnceLock<StationDb> = OnceLock::new();
@@ -42,7 +44,18 @@ fn get_db() -> &'static StationDb {
             index.entry(normalized).or_insert(i);
         }
 
-        StationDb { stations, index }
+        // Build reverse index: base stop ID → station name
+        let mut stop_id_to_name = HashMap::new();
+        for station in &stations {
+            for sid in &station.stop_ids {
+                let base = sid.trim_end_matches(['N', 'S']);
+                stop_id_to_name
+                    .entry(base.to_string())
+                    .or_insert_with(|| station.name.clone());
+            }
+        }
+
+        StationDb { stations, index, stop_id_to_name }
     })
 }
 
@@ -161,6 +174,15 @@ pub fn find_similar_stations(query: &str, max_results: usize) -> Vec<String> {
         .take(max_results)
         .map(|(_, name)| name.to_string())
         .collect()
+}
+
+/// Look up station name from a stop ID (e.g., "635N" → "Times Sq-42 St").
+///
+/// Strips the N/S direction suffix before matching.
+pub fn station_name_for_stop_id(stop_id: &str) -> Option<&'static str> {
+    let db = get_db();
+    let base = stop_id.trim_end_matches(['N', 'S']);
+    db.stop_id_to_name.get(base).map(|s| s.as_str())
 }
 
 /// Look up routes served at a station by name.

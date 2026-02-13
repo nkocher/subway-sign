@@ -2,94 +2,147 @@
 
 ## Architecture
 
-Two systemd services running on a 4GB Raspberry Pi:
+Single Rust binary running on a 4GB Raspberry Pi. tokio async runtime for I/O tasks, plus a dedicated OS thread for the render loop:
 
-- **subway-sign.service** — Display process (`src/main.py`). Fetches MTA GTFS-RT data via `src/mta/client.py`, renders to LED matrix at 30fps. Runs as root with real-time CPU priority (`Nice=-10`, `CPUSchedulingPolicy=fifo`).
-- **subway-web.service** — Web UI (`web/app.py`). Flask app served by gunicorn (2 workers, auto-recycled at 1000 requests). Runs as `admin` user. Config changes hot-reload in the display process within 5 seconds.
+- **Main async runtime (tokio):** Fetch task (MTA GTFS-RT, 20s interval), alert task (60s interval), config watcher (5s poll), web server (axum on port 5001).
+- **Render thread (std::thread):** Dedicated OS thread running the 60fps render loop. Not a tokio task because it runs perpetually with precise timing and makes blocking FFI calls to the LED matrix hardware.
+- **Shared state:** `Arc<AppState>` with `ArcSwap<Config>` and `ArcSwap<DisplaySnapshot>` for lock-free reads. Config hot-reloads within 5 seconds when `config.json` changes.
 
-## Stability Patterns
+## Concurrency
 
-These patterns exist to prevent the Pi from becoming unreachable after extended uptime:
+- **Lock-free reads:** `ArcSwap` for config and display snapshot. Render thread and web handlers read without blocking.
+- **Dedicated render thread:** `std::thread::spawn` (not `tokio::spawn_blocking`). Runs perpetually at 60fps, calls FFI `set_image()` for bulk pixel updates.
+- **Hardware FFI:** Direct call to hzeller's `set_image()` C API. Reduces per-frame overhead from 6,144 FFI calls (per-pixel) to 1 bulk copy.
 
-- **Always handle SIGTERM** in long-running services. Systemd sends SIGTERM on stop/restart, not SIGINT. Without a handler, ThreadPoolExecutor threads, HTTP sessions, and sockets leak on every restart cycle.
-- **Never use Flask dev server in production.** Use gunicorn with `--max-requests` for automatic worker recycling.
-- **Always set systemd `MemoryMax` and `TimeoutStopSec`** for Pi services. Without limits, the OOM killer will terminate sshd (low priority) while sparing the display service (high priority), making the Pi unreachable.
-- **Cache subprocess calls, never spawn per-request.** The web UI polls `/api/status` every 30s; without caching, this spawns ~5,760 subprocesses/day per open tab.
-- **Keep logging minimal.** Pi has limited storage. Stats print every 5 minutes (not 30 seconds). Error messages are rate-limited to one per source per 5 minutes.
-- **Keep `max_workers=8`** for the ThreadPoolExecutor — this matches the number of MTA GTFS-RT feeds fetched in parallel.
+## Display
+
+- **DisplayTarget trait:** `hardware` feature compiles `LedMatrixDisplay` (Pi GPIO), `mock` feature (default) compiles `MockDisplay` (no-op, for macOS dev).
+- **Render loop:** 60fps, 1px/frame scrolling. `set_image()` bulk FFI call keeps render thread at ~5% CPU. hzeller's GPIO thread uses ~73% CPU (expected, hard real-time PWM).
+- **Panel layout:** 3 chained 64x32 panels = 192x32 total. PWM bits: 11, LSB nanoseconds: 130, GPIO slowdown: 3.
+
+## Web
+
+- **axum server** (replaces Flask/gunicorn). Runs on 0.0.0.0:5001.
+- **rust-embed** for static files (HTML, CSS, JS, icons). All web assets compiled into the binary.
+- **API endpoints:** `/api/config` (GET/POST), `/api/status`, `/api/stations`, `/api/debug/snapshot`, `/api/restart`.
+
+## Build
+
+**macOS dev (mock display):**
+```bash
+cargo build
+cargo test
+cargo clippy
+```
+
+**Pi hardware (native compilation):**
+```bash
+cargo build --release --features hardware --no-default-features
+```
+
+Binary location: `target/release/subway-sign`
+
+Cross-compilation not supported. Build directly on the Pi.
 
 ## Key Numbers
 
-- Display process baseline memory: ~54MB RSS (stable)
-- `MemoryMax`: 512M (display), 256M (web)
-- Connection pools: 4 connections, 8 max size (matches feed count)
-- Stats interval: 300s. Fetch log: only on train count change.
+- **Memory:** ~18MB RSS (vs Python's 54MB + 50MB). Single binary replaces two systemd services.
+- **CPU:** Render thread ~5%, hzeller GPIO thread ~73% (expected).
+- **Intervals:** Train fetch 20s, alert fetch 60s, config poll 5s, stats log 300s.
+- **Render:** 60fps, 1px/frame scroll. Alert display triggered on train arrival (minutes == 0).
 
-## Development
+## Stability Patterns
 
-```bash
-# Syntax check all modified Python files
-python3 -m py_compile src/main.py
-python3 -m py_compile web/app.py
-python3 -m py_compile src/mta/client.py
+Most Python-era patterns still apply:
 
-# Run web UI locally (dev server)
-cd web && python3 app.py
+- **Always handle SIGTERM.** Systemd sends SIGTERM on stop/restart. Rust port listens for SIGTERM and SIGINT via `shutdown_signal()` and uses `CancellationToken` to gracefully shut down all tasks.
+- **Always set systemd `MemoryMax` and `TimeoutStopSec`.** Without limits, OOM killer may terminate sshd before the display process, making the Pi unreachable.
+- **Keep logging minimal.** Pi has limited storage. Stats print every 5 minutes. Fetch logs only on train count change.
+- **Render thread uses std::thread, not tokio.** It runs perpetually with precise timing and makes blocking FFI calls. `spawn_blocking` is for short-lived operations.
+- **set_image() bulk FFI.** Direct C API call copies entire framebuffer in one operation. Per-pixel FFI would be 6,144 calls/frame.
 
-# Run web UI locally (production-like)
-cd web && gunicorn --bind 127.0.0.1:5001 --workers 1 --timeout 5 app:app
-```
+New patterns:
+
+- **Lock-free reads via ArcSwap.** Config and snapshot updates never block readers. Render thread and web handlers always see consistent snapshots.
+- **hzeller GPIO thread CPU usage.** The `rpi-led-matrix` library spawns its own thread for PWM. ~73% CPU is expected behavior for hard real-time LED refresh.
 
 ## Deployment
 
-**Pi:** `admin@192.168.0.40` at `/home/admin/subway-sign`
-
-### Prerequisites
-
-Gunicorn must be installed on the Pi via apt (not pip):
-
-```bash
-ssh admin@192.168.0.40 "sudo apt install -y gunicorn"
-```
+**Pi:** `admin@192.168.0.40` at `/home/admin/subway-sign-rust`
+**OS:** Debian Trixie (Rust toolchain via rustup)
 
 ### Deploy workflow
 
 ```bash
-# 1. Deploy code and restart subway-sign
+# 1. Deploy code and build on Pi
 ./deploy.sh
 
-# 2. Restart subway-web (deploy.sh only restarts subway-sign)
-ssh admin@192.168.0.40 "sudo systemctl restart subway-web.service"
+# 2. Restart systemd service (single service, not two)
+ssh admin@192.168.0.40 "sudo systemctl restart subway-sign.service"
 ```
 
-`deploy.sh` is gitignored — create it from `deploy.example.sh` with `PI_HOST="admin@192.168.0.40"` and `PI_PATH="/home/admin/subway-sign"`.
+`deploy.sh` is gitignored — create it from `deploy.example.sh` with `PI_HOST="admin@192.168.0.40"` and `PI_PATH="/home/admin/subway-sign-rust"`.
 
-### Verified baselines (2026-02-01)
+The deploy script should:
+1. rsync code to Pi
+2. ssh to Pi and run `cargo build --release --features hardware --no-default-features`
+3. Copy binary to expected location or update systemd service to point to `target/release/subway-sign`
 
-Stability fixes deployed and verified:
+### systemd service
 
-- **subway-sign RSS:** ~54MB (within 512M MemoryMax)
-- **gunicorn master RSS:** ~23MB, workers: ~50MB each (within 256M MemoryMax)
-- **OOMScoreAdjust:** -500 (display), +500 (web) — OOM killer targets web before display/sshd
-- **SIGTERM shutdown:** Clean "Deactivated successfully" — no forced kills, no leaked threads
-- **Gunicorn:** 1 master + 2 workers, auto-recycled at 1000 requests
+Replace the two Python services (`subway-sign.service`, `subway-web.service`) with a single Rust service:
+
+```ini
+[Unit]
+Description=NYC Subway Sign (Rust)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/admin/subway-sign-rust
+ExecStart=/home/admin/subway-sign-rust/target/release/subway-sign
+Restart=always
+RestartSec=5
+
+# Stability limits
+MemoryMax=256M
+TimeoutStopSec=15s
+OOMScoreAdjust=-500
+
+# Real-time priority for render thread
+Nice=-10
+CPUSchedulingPolicy=fifo
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ### Verification commands
 
 ```bash
-# Check systemd memory limits
-systemctl show subway-sign.service -p MemoryMax  # expect 536870912
-systemctl show subway-web.service -p MemoryMax   # expect 268435456
+# Check systemd memory limit
+systemctl show subway-sign.service -p MemoryMax  # expect 268435456 (256M)
 
 # Test graceful shutdown
 sudo systemctl restart subway-sign && journalctl -u subway-sign -n 20
 
-# Check gunicorn processes (expect master + 2 workers)
-pgrep -a gunicorn
-
 # Memory snapshot
-ps -o pid,rss,vsz,comm -p $(pgrep -f 'run.py') $(pgrep -f 'gunicorn')
+ps -o pid,rss,vsz,comm -p $(pgrep subway-sign)
 
-# Long-running stability test
-python3 tests/stability_monitor.py  # Run for 24+ hours
+# CPU usage (expect render thread ~5%, GPIO thread ~73%)
+top -p $(pgrep subway-sign)
+
+# Check web server
+curl http://192.168.0.40:5001/api/status
 ```
+
+### Verified baselines (pending)
+
+Rust port deployed but **24-hour stability test still pending**. Expected baselines:
+
+- **RSS:** ~18MB (within 256M MemoryMax)
+- **SIGTERM shutdown:** Clean shutdown via `CancellationToken`, all tasks joined
+- **OOMScoreAdjust:** -500 (OOM killer targets other processes first, but not sshd)
+- **Render FPS:** 60fps sustained
+- **GPIO thread CPU:** ~73% (expected hard real-time PWM overhead)

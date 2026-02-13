@@ -94,7 +94,7 @@ async fn main() {
         .spawn(move || render_loop(render_state, render_flag))
         .expect("spawn render thread");
 
-    info!("All tasks started — rendering at 30fps");
+    info!("All tasks started — rendering at 60fps");
 
     // Wait for shutdown signal
     shutdown_signal().await;
@@ -270,12 +270,12 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     let mut frame_count: u64 = 0;
     let mut last_stats_time = Instant::now();
 
-    const TARGET_FPS: f64 = 30.0;
+    const TARGET_FPS: f64 = 60.0;
     const FRAME_TIME: std::time::Duration =
         std::time::Duration::from_nanos((1_000_000_000.0 / TARGET_FPS) as u64);
     const CYCLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
     const FLASH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
-    const SCROLL_SPEED: f32 = 2.0;
+    const SCROLL_SPEED: f32 = 1.0;
     const MAX_ALERT_CYCLE_DURATION: std::time::Duration = std::time::Duration::from_secs(90);
     const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
 

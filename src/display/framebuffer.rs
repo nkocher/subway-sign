@@ -111,12 +111,23 @@ impl FrameBuffer {
     ) -> usize {
         let font = super::fonts::get_font();
         let mut x_offset: i32 = 0;
+        let chars: Vec<char> = text.chars().collect();
 
-        for ch in text.chars() {
+        for (i, &ch) in chars.iter().enumerate() {
             if let Some(bitmap) = font.get_char_bitmap(ch, italic) {
                 self.blit_char(&bitmap, x + x_offset, y, color);
             }
-            x_offset += font.get_char_width(ch, italic) as i32 + spacing;
+
+            let char_width = font.get_char_width(ch, italic) as i32;
+
+            if italic && i + 1 < chars.len() {
+                // Per-character overlap for italic: tighten based on next char's left padding
+                let next_padding = font.get_char_left_padding(chars[i + 1], italic) as i32;
+                let overlap = (next_padding - 2).max(0);
+                x_offset += char_width - overlap + spacing;
+            } else {
+                x_offset += char_width + spacing;
+            }
         }
 
         x_offset.max(0) as usize

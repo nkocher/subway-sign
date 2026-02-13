@@ -233,14 +233,23 @@ impl MtaFont {
         if text.is_empty() {
             return 0;
         }
+        let chars: Vec<char> = text.chars().collect();
         let mut total: i32 = 0;
-        for ch in text.chars() {
+
+        for (i, &ch) in chars.iter().enumerate() {
             total += self.get_char_width(ch, italic) as i32;
+            if i + 1 < chars.len() {
+                if italic {
+                    // Per-character overlap for italic (matching Python's algorithm)
+                    let next_padding = self.get_char_left_padding(chars[i + 1], italic) as i32;
+                    let overlap = (next_padding - 2).max(0);
+                    total += spacing - overlap;
+                } else {
+                    total += spacing;
+                }
+            }
         }
-        let char_count = text.chars().count();
-        if char_count > 1 {
-            total += spacing * (char_count as i32 - 1);
-        }
+
         total.max(0) as usize
     }
 
