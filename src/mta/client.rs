@@ -229,11 +229,11 @@ impl MtaClient {
 
             let priority = alert_proto
                 .effect
-                .map(|e| extract_priority_from_effect(e))
+                .map(extract_priority_from_effect)
                 .unwrap_or(10);
 
             if let Some(ref header_text) = alert_proto.header_text {
-                for translation in &header_text.translation {
+                if let Some(translation) = header_text.translation.first() {
                     let clean_text: String = translation
                         .text
                         .split_whitespace()
@@ -249,7 +249,6 @@ impl MtaClient {
                             alert_id: entity.id.clone(),
                         });
                     }
-                    break; // Only first translation
                 }
             }
         }

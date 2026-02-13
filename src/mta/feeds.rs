@@ -1,7 +1,7 @@
-/// MTA GTFS-RT feed URL mapping.
-///
-/// Each feed covers a group of routes. The feed IDs map to:
-/// `https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs{suffix}`
+//! MTA GTFS-RT feed URL mapping.
+//!
+//! Each feed covers a group of routes. The feed IDs map to:
+//! `https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs{suffix}`
 
 /// Returns the feed URL suffix for a given route.
 pub fn feed_id_for_route(route: &str) -> Option<&'static str> {
