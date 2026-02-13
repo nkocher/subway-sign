@@ -11,14 +11,14 @@ A real-time MTA subway arrival display built with a Raspberry Pi 4 and LED matri
 - **Multi-platform support** for complex stations (e.g., Times Square with 8+ platforms)
 - **Automatic station detection** via fuzzy name matching against 472-station database
 - **Web control interface** for remote configuration without SSH
-- **Hot-reload configuration** - changes apply within 5 seconds, no restart needed
-- **Graceful degradation** - displays stale data during API outages
+- **Hot-reload configuration** — changes apply within 5 seconds, no restart needed
+- **Single binary** — one process replaces a multi-service Python stack
 
 ## Tech Stack
 
 **Hardware:** Raspberry Pi 4 | 3x 64x32 LED Matrix Panels (192x32 total)
 
-**Software:** Python 3 | Flask | Pillow | nyct-gtfs | rpi-rgb-led-matrix
+**Software:** Rust | Tokio | Axum | Prost (protobuf) | rpi-rgb-led-matrix
 
 ## Hardware Requirements
 
@@ -42,31 +42,27 @@ cp config.example.json config.json
 nano config.json
 ```
 
-### 2. Install Dependencies
+### 2. Build
 
 ```bash
-pip install -r requirements.txt
+# On Raspberry Pi (native compilation, requires root for GPIO)
+cargo build --release --features hardware --no-default-features
 
-# On Raspberry Pi, also install the LED matrix library:
-# https://github.com/hzeller/rpi-rgb-led-matrix
+# On Mac/Linux for development (uses mock display)
+cargo build
 ```
 
 ### 3. Run
 
 ```bash
-# On Raspberry Pi (requires root for GPIO)
-sudo python3 run.py
+# On Raspberry Pi
+sudo ./target/release/subway-sign
 
-# On Mac/Linux for development (uses mock display)
-python3 run.py
+# On Mac/Linux (mock display, no hardware needed)
+cargo run
 ```
 
-### 4. Web Interface (Optional)
-
-```bash
-python3 web/app.py
-# Access at http://localhost:5001
-```
+The web interface starts automatically at `http://<pi-ip>:5001`.
 
 ## Configuration
 
@@ -86,7 +82,7 @@ Edit `config.json` to set your station:
 }
 ```
 
-The `station_name` field uses fuzzy matching - try names like:
+The `station_name` field uses fuzzy matching — try names like:
 - `"34 St-Herald Sq"` (Herald Square)
 - `"Grand Central-42 St"` (Grand Central)
 - `"Times Sq-42 St"` (Times Square)
@@ -94,52 +90,62 @@ The `station_name` field uses fuzzy matching - try names like:
 ## Architecture
 
 ```
-Main Thread (30 FPS render loop)
-    ^ snapshot_queue (non-blocking read)
-    |
-Background Thread (fetches every 20s/60s)
-    | creates immutable DisplaySnapshot
-    v
-Web Thread (Flask, optional)
-    | config changes via HTTP
+Tokio async runtime
+├── Fetch task (trains every 20s, alerts every 60s)
+├── Config watcher (polls file mtime every 5s)
+└── Web server (axum on port 5001)
+
+Dedicated OS thread
+└── Render loop (60fps, FFI to LED matrix hardware)
+
+Shared state (lock-free)
+├── ArcSwap<Config>
+└── ArcSwap<DisplaySnapshot>
 ```
 
 Key design principles:
-- **Queue-based threading** - no locks in the render path
-- **Immutable data structures** - frozen dataclasses eliminate race conditions
-- **Simple frame timing** - fixed 33ms frame budget, no complex debt tracking
+- **Lock-free reads** — ArcSwap for config and display data, no locks in the render path
+- **Immutable snapshots** — fetch tasks produce complete `DisplaySnapshot` values, eliminating race conditions
+- **Bulk FFI** — single `set_image()` call per frame instead of per-pixel writes
 
 ## Project Structure
 
 ```
 subway-sign/
-├── run.py              # Entry point
+├── Cargo.toml          # Dependencies and feature flags
 ├── config.json         # Your configuration (gitignored)
 ├── src/
-│   ├── main.py         # Main loop orchestration
-│   ├── mta/            # MTA API client and data models
-│   └── display/        # Rendering and fonts
-├── web/                # Flask web interface
-├── assets/             # Fonts, icons, station database
-└── docs/               # Additional documentation
+│   ├── main.rs         # Entry point, task orchestration, render loop
+│   ├── config.rs       # Configuration loading and validation
+│   ├── models.rs       # Train, Alert, DisplaySnapshot types
+│   ├── display/        # Rendering engine, fonts, framebuffer, LED matrix
+│   ├── mta/            # GTFS-RT client, alert manager, station database
+│   └── web/            # Axum web server and API handlers
+├── assets/             # Fonts, icons, station database (compiled into binary)
+├── proto/              # GTFS-RT protobuf schema
+└── web/                # Static web UI (compiled into binary via rust-embed)
 ```
 
 ## Deployment
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed Raspberry Pi setup instructions, including systemd service configuration.
-
 Example files are provided:
-- `deploy.example.sh` - Deployment script template
-- `systemd/*.service.example` - systemd unit file templates
+- `deploy.example.sh` — deployment script template (rsync + build on Pi)
+- `systemd/subway-sign-rust.service.example` — systemd unit file
+
+```bash
+# Copy and configure deploy script
+cp deploy.example.sh deploy.sh
+# Edit PI_HOST and PI_PATH, then:
+./deploy.sh
+```
 
 ## Acknowledgments
 
-- **[MTA](https://new.mta.info/)** - Real-time subway data via GTFS-RT feeds
-- **[ColeWorks](https://www.coleworks.co/)** - MTA Countdown Clock font (CC0 license)
-- **[hzeller/rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix)** - LED matrix driver
-- **[Andrew Dickinson/nyct-gtfs](https://github.com/Andrew-Dickinson/nyct-gtfs)** - MTA feed parsing
-- **[Claude](https://claude.ai)** - AI pair programming
+- **[MTA](https://new.mta.info/)** — Real-time subway data via GTFS-RT feeds
+- **[ColeWorks](https://www.coleworks.co/)** — MTA Countdown Clock font (CC0 license)
+- **[hzeller/rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix)** — LED matrix driver
+- **[Claude](https://claude.ai)** — AI pair programming
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License — see [LICENSE](LICENSE) for details.

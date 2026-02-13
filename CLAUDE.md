@@ -23,7 +23,7 @@ Single Rust binary running on a 4GB Raspberry Pi. tokio async runtime for I/O ta
 
 ## Web
 
-- **axum server** (replaces Flask/gunicorn). Runs on 0.0.0.0:5001.
+- **axum server** on 0.0.0.0:5001.
 - **rust-embed** for static files (HTML, CSS, JS, icons). All web assets compiled into the binary.
 - **API endpoints:** `/api/config` (GET/POST), `/api/status`, `/api/stations/complete`, `/api/debug/snapshot`, `/api/restart`.
 
@@ -61,7 +61,7 @@ Cross-compilation not supported. Build directly on the Pi.
 
 ## Key Numbers
 
-- **Memory:** ~18MB RSS (vs Python's 54MB + 50MB). Single binary replaces two systemd services.
+- **Memory:** ~18MB RSS. Single binary, single systemd service.
 - **CPU:** Render thread ~5%, hzeller GPIO thread ~73% (expected).
 - **Intervals:** Train fetch 20s, alert fetch 60s, config poll 5s, stats log 300s.
 - **Render:** 60fps, 1px/frame scroll. Alert display triggered on train arrival (minutes == 0).
@@ -69,16 +69,11 @@ Cross-compilation not supported. Build directly on the Pi.
 
 ## Stability Patterns
 
-Most Python-era patterns still apply:
-
-- **Always handle SIGTERM.** Systemd sends SIGTERM on stop/restart. Rust port listens for SIGTERM and SIGINT via `shutdown_signal()` and uses `CancellationToken` to gracefully shut down all tasks.
+- **Always handle SIGTERM.** Systemd sends SIGTERM on stop/restart. `shutdown_signal()` listens for SIGTERM/SIGINT, `CancellationToken` propagates to all tasks.
 - **Always set systemd `MemoryMax` and `TimeoutStopSec`.** Without limits, OOM killer may terminate sshd before the display process, making the Pi unreachable.
 - **Keep logging minimal.** Pi has limited storage. Stats print every 5 minutes. Fetch logs only on train count change.
 - **Render thread uses std::thread, not tokio.** It runs perpetually with precise timing and makes blocking FFI calls. `spawn_blocking` is for short-lived operations.
 - **set_image() bulk FFI.** Direct C API call copies entire framebuffer in one operation. Per-pixel FFI would be 6,144 calls/frame.
-
-New patterns:
-
 - **Lock-free reads via ArcSwap.** Config and snapshot updates never block readers. Render thread and web handlers always see consistent snapshots.
 - **hzeller GPIO thread CPU usage.** The `rpi-led-matrix` library spawns its own thread for PWM. ~73% CPU is expected behavior for hard real-time LED refresh.
 
@@ -93,22 +88,20 @@ New patterns:
 # 1. Deploy code and build on Pi
 ./deploy.sh
 
-# 2. Restart systemd service (single service, not two)
-ssh admin@192.168.0.40 "sudo systemctl restart subway-sign.service"
+# 2. Restart systemd service
+ssh admin@192.168.0.40 "sudo systemctl restart subway-sign-rust.service"
 ```
 
 `deploy.sh` is gitignored — create it from `deploy.example.sh` with `PI_HOST="admin@192.168.0.40"` and `PI_PATH="/home/admin/subway-sign-rust"`.
 
-`deploy.sh` rsyncs from CWD — must run from the worktree root, not the parent project.
+`deploy.sh` rsyncs from CWD — must run from the repo root.
 
 The deploy script should:
 1. rsync code to Pi
 2. ssh to Pi and run `cargo build --release --features hardware --no-default-features`
 3. Copy binary to expected location or update systemd service to point to `target/release/subway-sign`
 
-### systemd service
-
-Replace the two Python services (`subway-sign.service`, `subway-web.service`) with a single Rust service:
+### systemd service (`subway-sign-rust.service`)
 
 ```ini
 [Unit]
@@ -140,10 +133,10 @@ WantedBy=multi-user.target
 
 ```bash
 # Check systemd memory limit
-systemctl show subway-sign.service -p MemoryMax  # expect 268435456 (256M)
+systemctl show subway-sign-rust.service -p MemoryMax  # expect 268435456 (256M)
 
 # Test graceful shutdown
-sudo systemctl restart subway-sign && journalctl -u subway-sign -n 20
+sudo systemctl restart subway-sign-rust && journalctl -u subway-sign-rust -n 20
 
 # Memory snapshot
 ps -o pid,rss,vsz,comm -p $(pgrep subway-sign)
