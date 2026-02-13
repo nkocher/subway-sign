@@ -241,6 +241,43 @@ pub async fn restart(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     }
 }
 
+/// GET /api/healthz — liveness check with fetch and render heartbeats.
+pub async fn healthz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let config = state.config.load();
+    let fetch_age = now - state.last_fetch_success.load(std::sync::atomic::Ordering::Relaxed);
+    let render_age = now - state.last_render_tick.load(std::sync::atomic::Ordering::Relaxed);
+
+    let fetch_stale_threshold = config.refresh.trains_interval * 3;
+    let render_stale_threshold = 10;
+
+    let fetch_stale = fetch_age > fetch_stale_threshold;
+    let render_stale = render_age > render_stale_threshold;
+    let ok = !fetch_stale && !render_stale;
+
+    let reason = if fetch_stale && render_stale {
+        Some(format!("fetch stale {}s, render stale {}s", fetch_age, render_age))
+    } else if fetch_stale {
+        Some(format!("fetch stale {}s", fetch_age))
+    } else if render_stale {
+        Some(format!("render stale {}s", render_age))
+    } else {
+        None
+    };
+
+    Json(json!({
+        "ok": ok,
+        "age_seconds": fetch_age,
+        "render_age_seconds": render_age,
+        "degraded": fetch_stale && !render_stale,
+        "reason": reason,
+    }))
+}
+
 // -- Helper functions --
 
 /// Get config file mtime as RFC 3339 string (for last_modified / last_update).

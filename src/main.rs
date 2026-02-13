@@ -6,7 +6,7 @@ mod web;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -30,6 +30,8 @@ pub struct AppState {
     pub config_path: PathBuf,
     pub shutdown: CancellationToken,
     pub config_changed: tokio::sync::Notify,
+    pub last_fetch_success: AtomicU64,
+    pub last_render_tick: AtomicU64,
 }
 
 #[tokio::main]
@@ -73,6 +75,8 @@ async fn main() {
         config_path: config_path.clone(),
         shutdown: CancellationToken::new(),
         config_changed: tokio::sync::Notify::new(),
+        last_fetch_success: AtomicU64::new(0),
+        last_render_tick: AtomicU64::new(0),
     });
 
     // Spawn fetch task
@@ -169,6 +173,12 @@ async fn do_train_fetch(
     };
 
     state.snapshot.store(Arc::new(snapshot));
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    state.last_fetch_success.store(now, Ordering::Relaxed);
 
     if train_count != *last_train_count {
         info!("[FETCH] {} trains fetched", train_count);
@@ -499,6 +509,12 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
                 current_brightness = new_brightness;
                 info!("[RENDER] Brightness updated to {}%", new_brightness);
             }
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            state.last_render_tick.store(now, Ordering::Relaxed);
         }
 
         // Stats logging every 5 minutes
@@ -592,6 +608,8 @@ mod tests {
             config_path: PathBuf::from("config.json"),
             shutdown: CancellationToken::new(),
             config_changed: tokio::sync::Notify::new(),
+            last_fetch_success: AtomicU64::new(0),
+            last_render_tick: AtomicU64::new(0),
         })
     }
 
