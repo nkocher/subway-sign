@@ -148,10 +148,6 @@ async fn fetch_task(state: Arc<AppState>) {
         std::time::Duration::from_secs(config.refresh.alerts_interval),
     );
 
-    // Tick immediately on first call
-    train_interval.tick().await;
-    alert_interval.tick().await;
-
     loop {
         tokio::select! {
             _ = state.shutdown.cancelled() => {
