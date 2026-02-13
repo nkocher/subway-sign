@@ -31,8 +31,9 @@ rsync -az --delete \
 echo "Building on Pi..."
 ssh ${PI_HOST} "source ~/.cargo/env && cd ${PI_PATH} && cargo build --release --features hardware --no-default-features"
 
-# Copy config if it doesn't exist on Pi
-ssh ${PI_HOST} "test -f ${PI_PATH}/config.json || cp ${PI_PATH}/config.example.json ${PI_PATH}/config.json"
+# Copy config if it doesn't exist on Pi, ensure daemon can write it
+# (hzeller drops privileges from root to daemon after GPIO init)
+ssh ${PI_HOST} "test -f ${PI_PATH}/config.json || cp ${PI_PATH}/config.example.json ${PI_PATH}/config.json; sudo chown daemon:daemon ${PI_PATH}/config.json"
 
 # Install/update systemd service
 echo "Updating systemd service..."
