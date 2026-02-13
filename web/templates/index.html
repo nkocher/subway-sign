@@ -134,6 +134,27 @@
         let selectedBorough = null;
         let editMode = false;
         let dragState = null;
+        let applyInFlight = false;
+
+        async function fetchWithRetry(url, options = {}, retries = 2, delay = 1000) {
+            for (let attempt = 0; attempt <= retries; attempt++) {
+                try {
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 8000);
+                    const response = await fetch(url, { ...options, signal: controller.signal });
+                    clearTimeout(timeout);
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return await response.json();
+                } catch (error) {
+                    if (attempt < retries) {
+                        showToast(`Retrying... (${attempt + 1}/${retries})`, 'warning', 1500);
+                        await new Promise(r => setTimeout(r, delay * (attempt + 1)));
+                    } else {
+                        throw error;
+                    }
+                }
+            }
+        }
 
         // ========== UUID POLYFILL ==========
         // Fallback for browsers that don't support crypto.randomUUID()
@@ -1001,10 +1022,13 @@
 
         // ========== APPLY CHANGES ==========
         async function applyChanges() {
+            if (applyInFlight) return;
             if (!selectedStation && !currentConfig) {
                 showToast('Select a station first', 'warning');
                 return;
             }
+
+            applyInFlight = true;
 
             // Use selected station if available, otherwise use current config
             const stationConfig = selectedStation ? {
@@ -1022,28 +1046,27 @@
             };
 
             try {
-                showToast('Applying...', 'info');
-                const response = await fetch('/api/config', {
+                showToast('Saving...', 'info');
+                const data = await fetchWithRetry('/api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(newConfig)
                 });
 
-                const data = await response.json();
-
                 if (data.success) {
                     triggerHaptic('success');
-                    showToast('Restarting display...', 'info');
                     currentConfig = newConfig;
                     updateHeroSection(newConfig);
-
-                    // Auto-restart display after applying changes
+                    showToast('Saved!', 'success');
+                    // Restart display after successful save (no retry on restart)
                     await restartDisplay(true);
                 } else {
                     showToast('Error: ' + data.message, 'error');
                 }
             } catch (error) {
-                showToast('Error: ' + error.message, 'error');
+                showToast('Save failed: ' + error.message, 'error', 4000);
+            } finally {
+                applyInFlight = false;
             }
         }
 
