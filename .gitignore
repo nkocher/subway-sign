@@ -19,6 +19,9 @@ venv/
 # Claude Code
 .claude/
 
+# Git worktrees
+.worktrees/
+
 # Deployment-specific (contains local IPs/paths)
 config.json
 deploy.sh
