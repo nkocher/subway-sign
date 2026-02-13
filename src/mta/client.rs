@@ -11,6 +11,7 @@ use crate::mta::alerts::effect_priority;
 use crate::mta::feeds;
 
 /// Generated protobuf types from gtfs-realtime.proto.
+#[allow(clippy::all, clippy::doc_overindented_list_items, clippy::doc_lazy_continuation)]
 pub mod transit_realtime {
     include!(concat!(env!("OUT_DIR"), "/transit_realtime.rs"));
 }

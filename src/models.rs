@@ -205,7 +205,7 @@ mod tests {
             trains.push(Train {
                 route: format!("{}", i + 1),
                 destination: format!("Dest {}", i),
-                minutes: i as i32,
+                minutes: i,
                 is_express: false,
                 arrival_timestamp: 0.0,
                 direction: Direction::Uptown,
