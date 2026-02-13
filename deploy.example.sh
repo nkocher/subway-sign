@@ -24,11 +24,12 @@ rsync -az --delete \
     --exclude .git/ \
     --exclude .worktrees/ \
     --exclude deploy.sh \
+    --exclude .cargo/config.toml \
     ./ "${PI_HOST}:${PI_PATH}/"
 
 # Build on Pi (native compilation)
 echo "Building on Pi..."
-ssh ${PI_HOST} "cd ${PI_PATH} && cargo build --release --features hardware --no-default-features"
+ssh ${PI_HOST} "source ~/.cargo/env && cd ${PI_PATH} && cargo build --release --features hardware --no-default-features"
 
 # Copy config if it doesn't exist on Pi
 ssh ${PI_HOST} "test -f ${PI_PATH}/config.json || cp ${PI_PATH}/config.example.json ${PI_PATH}/config.json"
