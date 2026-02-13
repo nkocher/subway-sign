@@ -88,8 +88,13 @@ mod hw {
             let _ = rt_options.set_gpio_slowdown(3);
             let _ = rt_options.set_drop_privileges(false);
 
-            let matrix = LedMatrix::new(Some(options), Some(rt_options))
-                .expect("Failed to initialize LED matrix");
+            let matrix = match LedMatrix::new(Some(options), Some(rt_options)) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!("Failed to initialize LED matrix: {}", e);
+                    std::process::exit(1);
+                }
+            };
 
             let canvas = matrix.offscreen_canvas();
 

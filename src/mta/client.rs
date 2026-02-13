@@ -51,23 +51,23 @@ pub struct MtaClient {
 }
 
 impl MtaClient {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, String> {
         let http = Client::builder()
             .user_agent("NYC-SubwaySign-Rust/1.0")
             .gzip(true)
             .pool_max_idle_per_host(4)
             .timeout(std::time::Duration::from_secs(12))
             .build()
-            .expect("failed to create HTTP client");
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-        MtaClient {
+        Ok(MtaClient {
             http,
             feed_cache: HashMap::new(),
             alerts_cache: Vec::new(),
             alerts_etag: None,
             backoff: HashMap::new(),
             last_error_log: HashMap::new(),
-        }
+        })
     }
 
     /// Fetch upcoming trains for given stops and routes in parallel.
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn test_client_creation() {
-        let client = MtaClient::new();
+        let client = MtaClient::new().unwrap();
         assert!(client.feed_cache.is_empty());
         assert!(client.alerts_cache.is_empty());
         assert!(client.backoff.is_empty());
@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_backoff_logic() {
-        let mut client = MtaClient::new();
+        let mut client = MtaClient::new().unwrap();
         assert!(client.should_fetch("test"));
 
         client.record_failure("test");

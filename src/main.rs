@@ -91,10 +91,16 @@ async fn main() {
     let render_state = Arc::clone(&state);
     let render_running = Arc::new(AtomicBool::new(true));
     let render_flag = Arc::clone(&render_running);
-    let render_thread = std::thread::Builder::new()
+    let render_thread = match std::thread::Builder::new()
         .name("render".into())
         .spawn(move || render_loop(render_state, render_flag))
-        .expect("spawn render thread");
+    {
+        Ok(handle) => handle,
+        Err(e) => {
+            error!("Failed to spawn render thread: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     info!("All tasks started — rendering at 60fps");
 
@@ -172,7 +178,13 @@ async fn do_train_fetch(
 
 /// Background fetch task — runs train + alert fetches on separate intervals.
 async fn fetch_task(state: Arc<AppState>) {
-    let mut client = MtaClient::new();
+    let mut client = match MtaClient::new() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("[FETCH] {}", e);
+            return;
+        }
+    };
     let mut last_train_count: i32 = -1;
     let mut cached_alerts: Vec<models::Alert> = Vec::new();
 
@@ -522,17 +534,22 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
 /// Wait for SIGTERM or SIGINT (Ctrl-C).
 async fn shutdown_signal() {
     let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("install Ctrl-C signal handler");
+        if let Err(e) = signal::ctrl_c().await {
+            error!("Failed to install Ctrl-C handler: {}", e);
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("install SIGTERM handler")
-            .recv()
-            .await;
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                error!("Failed to install SIGTERM handler: {}", e);
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]
