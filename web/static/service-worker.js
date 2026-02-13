@@ -1,5 +1,5 @@
 // NYC Subway Sign Control - Service Worker
-const CACHE_NAME = 'subway-sign-v2';
+const CACHE_NAME = 'subway-sign-v3';
 const urlsToCache = [
   '/',
   '/static/style.css',
@@ -17,26 +17,29 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Fetch from cache if available, otherwise from network
+// Cache-first for static assets, network-only for API calls
 self.addEventListener('fetch', (event) => {
+  // Never cache API calls — always go to network
+  if (event.request.url.includes('/api/')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
+  // Cache-first for static assets only
   event.respondWith(
     caches.match(event.request)
       .then((response) => {
-        // Cache hit - return response
         if (response) {
           return response;
         }
 
         return fetch(event.request).then(
           (response) => {
-            // Check if we received a valid response
             if (!response || response.status !== 200 || response.type !== 'basic') {
               return response;
             }
 
-            // Clone the response
             const responseToCache = response.clone();
-
             caches.open(CACHE_NAME)
               .then((cache) => {
                 cache.put(event.request, responseToCache);
