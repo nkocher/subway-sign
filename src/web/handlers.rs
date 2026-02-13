@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -10,7 +11,7 @@ use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::mta::stations;
-use crate::AppState;
+use crate::{unix_now_secs, AppState};
 
 #[derive(Deserialize)]
 pub struct StationSearchParams {
@@ -243,35 +244,26 @@ pub async fn restart(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 /// GET /api/healthz — liveness check with fetch and render heartbeats.
 pub async fn healthz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
+    let now = unix_now_secs();
     let config = state.config.load();
-    let fetch_age = now - state.last_fetch_success.load(std::sync::atomic::Ordering::Relaxed);
-    let render_age = now - state.last_render_tick.load(std::sync::atomic::Ordering::Relaxed);
 
-    let fetch_stale_threshold = config.refresh.trains_interval * 3;
-    let render_stale_threshold = 10;
+    let fetch_age = now - state.last_fetch_success.load(Ordering::Relaxed);
+    let render_age = now - state.last_render_tick.load(Ordering::Relaxed);
 
-    let fetch_stale = fetch_age > fetch_stale_threshold;
-    let render_stale = render_age > render_stale_threshold;
+    let fetch_stale = fetch_age > config.refresh.trains_interval * 3;
+    let render_stale = render_age > 10;
     let ok = !fetch_stale && !render_stale;
 
-    let reason = if fetch_stale && render_stale {
-        Some(format!("fetch stale {}s, render stale {}s", fetch_age, render_age))
-    } else if fetch_stale {
-        Some(format!("fetch stale {}s", fetch_age))
-    } else if render_stale {
-        Some(format!("render stale {}s", render_age))
-    } else {
-        None
+    let reason = match (fetch_stale, render_stale) {
+        (true, true) => Some(format!("fetch stale {}s, render stale {}s", fetch_age, render_age)),
+        (true, false) => Some(format!("fetch stale {}s", fetch_age)),
+        (false, true) => Some(format!("render stale {}s", render_age)),
+        (false, false) => None,
     };
 
     Json(json!({
         "ok": ok,
-        "age_seconds": fetch_age,
+        "fetch_age_seconds": fetch_age,
         "render_age_seconds": render_age,
         "degraded": fetch_stale && !render_stale,
         "reason": reason,

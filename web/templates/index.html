@@ -140,9 +140,9 @@
             for (let attempt = 0; attempt <= retries; attempt++) {
                 try {
                     const controller = new AbortController();
-                    const timeout = setTimeout(() => controller.abort(), 8000);
+                    const timeoutId = setTimeout(() => controller.abort(), 8000);
                     const response = await fetch(url, { ...options, signal: controller.signal });
-                    clearTimeout(timeout);
+                    clearTimeout(timeoutId);
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     return await response.json();
                 } catch (error) {

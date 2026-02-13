@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use arc_swap::ArcSwap;
 use tokio::signal;
@@ -32,6 +32,14 @@ pub struct AppState {
     pub config_changed: tokio::sync::Notify,
     pub last_fetch_success: AtomicU64,
     pub last_render_tick: AtomicU64,
+}
+
+/// Current time as seconds since the Unix epoch.
+pub fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[tokio::main]
@@ -173,12 +181,7 @@ async fn do_train_fetch(
     };
 
     state.snapshot.store(Arc::new(snapshot));
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    state.last_fetch_success.store(now, Ordering::Relaxed);
+    state.last_fetch_success.store(unix_now_secs(), Ordering::Relaxed);
 
     if train_count != *last_train_count {
         info!("[FETCH] {} trains fetched", train_count);
@@ -510,11 +513,7 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
                 info!("[RENDER] Brightness updated to {}%", new_brightness);
             }
 
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            state.last_render_tick.store(now, Ordering::Relaxed);
+            state.last_render_tick.store(unix_now_secs(), Ordering::Relaxed);
         }
 
         // Stats logging every 5 minutes

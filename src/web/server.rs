@@ -24,12 +24,11 @@ pub async fn run(state: Arc<AppState>) {
         // API routes
         .route("/api/config", get(handlers::get_config).post(handlers::update_config))
         .route("/api/status", get(handlers::get_status))
-        .route("/api/stations/complete", get(handlers::get_complete_stations))
-        .route("/api/stations/lookup/{station_name}", get(handlers::lookup_station))
-
-        .route("/api/debug/snapshot", get(handlers::get_debug_snapshot))
         .route("/api/healthz", get(handlers::healthz))
         .route("/api/restart", post(handlers::restart))
+        .route("/api/stations/complete", get(handlers::get_complete_stations))
+        .route("/api/stations/lookup/{station_name}", get(handlers::lookup_station))
+        .route("/api/debug/snapshot", get(handlers::get_debug_snapshot))
         // Static files and index
         .route("/", get(serve_index))
         .fallback(get(serve_static))
