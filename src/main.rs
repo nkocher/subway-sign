@@ -1,0 +1,488 @@
+mod config;
+mod display;
+mod models;
+mod mta;
+mod web;
+
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+use arc_swap::ArcSwap;
+use tokio::signal;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
+
+use config::Config;
+use display::matrix::create_display;
+use display::renderer::Renderer;
+use models::{Alert, DisplaySnapshot};
+use mta::alerts::AlertManager;
+use mta::client::MtaClient;
+
+/// Shared application state — lock-free reads via ArcSwap.
+pub struct AppState {
+    pub config: ArcSwap<Config>,
+    pub snapshot: ArcSwap<DisplaySnapshot>,
+    pub alert_manager: Mutex<AlertManager>,
+    pub config_path: PathBuf,
+    pub shutdown: CancellationToken,
+}
+
+#[tokio::main]
+async fn main() {
+    // Initialize tracing (structured logging)
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "subway_sign=info".parse().unwrap()),
+        )
+        .init();
+
+    info!("NYC Subway Sign (Rust) starting");
+
+    // Find config file
+    let config_path = find_config_path();
+    info!("Config file: {}", config_path.display());
+
+    // Load initial config
+    let initial_config = match Config::load(&config_path) {
+        Ok(cfg) => {
+            info!(
+                "Config loaded: {} platforms, routes: {}, brightness: {:.0}%",
+                cfg.station_stops.len(),
+                cfg.routes.join(","),
+                cfg.display.brightness * 100.0
+            );
+            cfg
+        }
+        Err(e) => {
+            error!("Failed to load config: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Build shared state
+    let state = Arc::new(AppState {
+        config: ArcSwap::from_pointee(initial_config.clone()),
+        snapshot: ArcSwap::from_pointee(DisplaySnapshot::empty()),
+        alert_manager: Mutex::new(AlertManager::new()),
+        config_path: config_path.clone(),
+        shutdown: CancellationToken::new(),
+    });
+
+    // Spawn fetch task
+    let fetch_state = Arc::clone(&state);
+    let fetch_handle = tokio::spawn(fetch_task(fetch_state));
+
+    // Spawn config watcher task
+    let config_state = Arc::clone(&state);
+    let config_handle = tokio::spawn(config_watcher_task(config_state));
+
+    // Spawn web server task
+    let web_state = Arc::clone(&state);
+    let web_handle = tokio::spawn(web::server::run(web_state));
+
+    // Spawn render thread (dedicated OS thread, not tokio)
+    let render_state = Arc::clone(&state);
+    let render_running = Arc::new(AtomicBool::new(true));
+    let render_flag = Arc::clone(&render_running);
+    let render_thread = std::thread::Builder::new()
+        .name("render".into())
+        .spawn(move || render_loop(render_state, render_flag))
+        .expect("spawn render thread");
+
+    info!("All tasks started — rendering at 30fps");
+
+    // Wait for shutdown signal
+    shutdown_signal().await;
+    info!("Shutdown signal received");
+
+    // Signal all tasks to stop
+    state.shutdown.cancel();
+    render_running.store(false, Ordering::Relaxed);
+
+    // Wait for tasks to finish
+    let _ = fetch_handle.await;
+    let _ = config_handle.await;
+    let _ = web_handle.await;
+    render_thread.join().ok();
+
+    info!("Shutdown complete");
+}
+
+/// Find the config.json file (check CWD, then parent directory).
+fn find_config_path() -> PathBuf {
+    let candidates = [
+        PathBuf::from("config.json"),
+        PathBuf::from("../config.json"),
+    ];
+    for path in &candidates {
+        if path.exists() {
+            return path.clone();
+        }
+    }
+    // Default even if it doesn't exist yet
+    PathBuf::from("config.json")
+}
+
+/// Background fetch task — runs train + alert fetches on separate intervals.
+async fn fetch_task(state: Arc<AppState>) {
+    let mut client = MtaClient::new();
+    let mut last_train_count: i32 = -1;
+    let mut cached_alerts: Vec<models::Alert> = Vec::new();
+
+    info!("[FETCH] Background fetch task started");
+
+    // Initial 3-second delay to let everything settle
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    // Use configured intervals (not hardcoded)
+    let config = state.config.load();
+    let mut train_interval = tokio::time::interval(
+        std::time::Duration::from_secs(config.refresh.trains_interval),
+    );
+    let mut alert_interval = tokio::time::interval(
+        std::time::Duration::from_secs(config.refresh.alerts_interval),
+    );
+
+    // Tick immediately on first call
+    train_interval.tick().await;
+    alert_interval.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = state.shutdown.cancelled() => {
+                info!("[FETCH] Shutting down");
+                break;
+            }
+            _ = alert_interval.tick() => {
+                let config = state.config.load();
+                if config.display.show_alerts {
+                    let routes: HashSet<String> = config.routes.iter().cloned().collect();
+                    let raw_alerts = client.fetch_alerts(&routes).await;
+                    let mut am = state.alert_manager.lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    cached_alerts = am.filter_and_sort(&raw_alerts);
+                }
+            }
+            _ = train_interval.tick() => {
+                let config = state.config.load();
+
+                let all_stop_ids: Vec<String> = config
+                    .station_stops
+                    .iter()
+                    .flat_map(|(up, down)| vec![up.clone(), down.clone()])
+                    .collect();
+
+                let routes: HashSet<String> = config.routes.iter().cloned().collect();
+
+                let trains = client.fetch_trains(
+                    &all_stop_ids,
+                    &routes,
+                    config.display.max_trains as usize,
+                ).await;
+
+                let train_count = trains.len() as i32;
+
+                let snapshot = DisplaySnapshot {
+                    trains,
+                    alerts: cached_alerts.clone(),
+                    fetched_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs_f64(),
+                };
+
+                state.snapshot.store(Arc::new(snapshot));
+
+                if train_count != last_train_count {
+                    info!("[FETCH] {} trains fetched", train_count);
+                    last_train_count = train_count;
+                }
+            }
+        }
+    }
+}
+
+/// Config watcher — polls config file mtime every 5 seconds.
+async fn config_watcher_task(state: Arc<AppState>) {
+    let mut last_mtime = std::fs::metadata(&state.config_path)
+        .and_then(|m| m.modified())
+        .ok();
+
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+
+    loop {
+        tokio::select! {
+            _ = state.shutdown.cancelled() => {
+                info!("[CONFIG] Shutting down");
+                break;
+            }
+            _ = interval.tick() => {
+                let current_mtime = std::fs::metadata(&state.config_path)
+                    .and_then(|m| m.modified())
+                    .ok();
+
+                if current_mtime != last_mtime {
+                    info!("[CONFIG] File changed, reloading...");
+                    match Config::load(&state.config_path) {
+                        Ok(new_config) => {
+                            info!(
+                                "[CONFIG] Reloaded: {} platforms, routes: {}",
+                                new_config.station_stops.len(),
+                                new_config.routes.join(",")
+                            );
+                            state.config.store(Arc::new(new_config));
+                            last_mtime = current_mtime;
+                        }
+                        Err(e) => {
+                            warn!("[CONFIG] Reload failed: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Render loop — runs in a dedicated OS thread at 30fps.
+///
+/// This is NOT a tokio task. It's a real thread because:
+/// - It runs perpetually at 30fps with precise timing
+/// - It calls blocking FFI (LED matrix VSync) on hardware
+/// - spawn_blocking is for short-lived operations, not permanent loops
+fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
+    let config = state.config.load();
+    let brightness = (config.display.brightness * 100.0) as u8;
+    let mut display = create_display(brightness);
+    let mut renderer = Renderer::new();
+
+    // Render state (matches Python main loop variables)
+    let mut cycle_index: usize = 0;
+    let mut flash_state = false;
+    let mut alert_scroll_offset: f32 = 0.0;
+    let mut show_alert = false;
+    let mut current_alert: Option<Alert> = None;
+    let mut alert_triggered_by: Option<(String, String)> = None;
+    let mut alert_cycle_start_time = Instant::now();
+
+    let mut last_cycle_time = Instant::now();
+    let mut last_flash_time = Instant::now();
+    let mut frame_count: u64 = 0;
+    let mut last_stats_time = Instant::now();
+
+    const TARGET_FPS: f64 = 30.0;
+    const FRAME_TIME: std::time::Duration =
+        std::time::Duration::from_nanos((1_000_000_000.0 / TARGET_FPS) as u64);
+    const CYCLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+    const FLASH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+    const SCROLL_SPEED: f32 = 2.0;
+    const MAX_ALERT_CYCLE_DURATION: std::time::Duration = std::time::Duration::from_secs(90);
+    const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
+    info!("[RENDER] Render loop started ({}fps)", TARGET_FPS as u32);
+
+    while running.load(Ordering::Relaxed) {
+        let frame_start = Instant::now();
+
+        // Load latest snapshot (lock-free)
+        let snapshot = state.snapshot.load();
+
+        // Update cycle index
+        if last_cycle_time.elapsed() >= CYCLE_INTERVAL {
+            last_cycle_time = Instant::now();
+            cycle_index = (cycle_index + 1) % 6;
+        }
+
+        // Update flash state
+        if last_flash_time.elapsed() >= FLASH_INTERVAL {
+            last_flash_time = Instant::now();
+            flash_state = !flash_state;
+        }
+
+        // Alert state machine
+        update_alert_state(
+            &state,
+            &snapshot,
+            &mut renderer,
+            &mut show_alert,
+            &mut current_alert,
+            &mut alert_scroll_offset,
+            &mut alert_triggered_by,
+            &mut alert_cycle_start_time,
+            SCROLL_SPEED,
+            MAX_ALERT_CYCLE_DURATION,
+        );
+
+        // Render frame
+        let frame = renderer.render_frame(
+            &snapshot,
+            cycle_index,
+            flash_state,
+            alert_scroll_offset,
+            show_alert,
+            current_alert.as_ref(),
+        );
+
+        // Push to display
+        display.swap(&frame);
+
+        frame_count += 1;
+
+        // Stats logging every 5 minutes
+        if last_stats_time.elapsed() >= STATS_INTERVAL {
+            let fps = frame_count as f64 / last_stats_time.elapsed().as_secs_f64();
+            info!(
+                "[STATS] FPS: {:.1} | Trains: {} | Alerts: {} | Snapshot age: {:.1}s",
+                fps,
+                snapshot.trains.len(),
+                snapshot.alerts.len(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64()
+                    - snapshot.fetched_at,
+            );
+            frame_count = 0;
+            last_stats_time = Instant::now();
+        }
+
+        // Sleep to maintain target FPS
+        let elapsed = frame_start.elapsed();
+        if elapsed < FRAME_TIME {
+            std::thread::sleep(FRAME_TIME - elapsed);
+        }
+    }
+
+    info!("[RENDER] Render loop stopped");
+}
+
+/// Alert state machine — extracted from render loop for readability.
+///
+/// Triggers alert display when a train arrives (minutes == 0), cycles through
+/// queued alerts with scrolling, and clears when all alerts have been shown
+/// or the triggering train departs.
+#[allow(clippy::too_many_arguments)]
+fn update_alert_state(
+    state: &AppState,
+    snapshot: &DisplaySnapshot,
+    renderer: &mut Renderer,
+    show_alert: &mut bool,
+    current_alert: &mut Option<Alert>,
+    alert_scroll_offset: &mut f32,
+    alert_triggered_by: &mut Option<(String, String)>,
+    alert_cycle_start_time: &mut Instant,
+    scroll_speed: f32,
+    max_duration: std::time::Duration,
+) {
+    let first_train = snapshot.get_first_train();
+    let train_at_zero = first_train.minutes == 0;
+
+    // Check if the train that triggered alerts has departed
+    let triggering_train_departed = *show_alert
+        && alert_triggered_by.as_ref().map_or(false, |(route, dest)| {
+            !snapshot.trains.iter().any(|t| {
+                t.route == *route && t.destination == *dest && t.minutes == 0
+            })
+        });
+
+    let mut am = state.alert_manager.lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // Start showing alerts when a train arrives and alerts are queued
+    if train_at_zero && !*show_alert && am.has_alerts() {
+        am.reset_cycle();
+        if let Some(alert) = am.get_next_alert() {
+            *current_alert = Some(alert.clone());
+            *show_alert = true;
+            *alert_scroll_offset = 0.0;
+            *alert_triggered_by = Some((first_train.route.clone(), first_train.destination.clone()));
+            *alert_cycle_start_time = Instant::now();
+        }
+    }
+
+    // Process active alert display
+    if *show_alert && current_alert.is_some() {
+        if alert_cycle_start_time.elapsed() > max_duration {
+            clear_alert_state(show_alert, current_alert, alert_scroll_offset, alert_triggered_by);
+        } else {
+            *alert_scroll_offset += scroll_speed;
+
+            if *alert_scroll_offset >= renderer.get_scroll_complete_distance() as f32 {
+                if let Some(ref alert) = current_alert {
+                    am.mark_displayed(alert);
+                }
+
+                // Decide what to show next
+                let next = if triggering_train_departed && train_at_zero && am.has_alerts() {
+                    am.reset_cycle();
+                    am.get_next_alert().cloned()
+                } else if !triggering_train_departed && !am.all_shown_this_cycle() {
+                    am.get_next_alert().cloned()
+                } else {
+                    None
+                };
+
+                match next {
+                    Some(alert) => {
+                        *current_alert = Some(alert);
+                        *alert_scroll_offset = 0.0;
+                        if triggering_train_departed {
+                            *alert_triggered_by = Some((
+                                first_train.route.clone(),
+                                first_train.destination.clone(),
+                            ));
+                            *alert_cycle_start_time = Instant::now();
+                        }
+                    }
+                    None => {
+                        clear_alert_state(show_alert, current_alert, alert_scroll_offset, alert_triggered_by);
+                    }
+                }
+            }
+        }
+    }
+
+    am.periodic_cleanup();
+}
+
+/// Reset all alert display state to idle.
+fn clear_alert_state(
+    show_alert: &mut bool,
+    current_alert: &mut Option<Alert>,
+    alert_scroll_offset: &mut f32,
+    alert_triggered_by: &mut Option<(String, String)>,
+) {
+    *show_alert = false;
+    *current_alert = None;
+    *alert_scroll_offset = 0.0;
+    *alert_triggered_by = None;
+}
+
+/// Wait for SIGTERM or SIGINT (Ctrl-C).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("install Ctrl-C signal handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+}

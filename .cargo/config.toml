@@ -1,0 +1,13 @@
+# Cross-compilation for Raspberry Pi 4 (aarch64)
+#
+# Prerequisites:
+#   macOS:  brew install aarch64-unknown-linux-gnu
+#           rustup target add aarch64-unknown-linux-gnu
+#   Or use `cross`: cargo install cross
+#                    cross build --release --target aarch64-unknown-linux-gnu
+#
+# Usage:
+#   cargo build --release --target aarch64-unknown-linux-gnu
+
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-unknown-linux-gnu-gcc"

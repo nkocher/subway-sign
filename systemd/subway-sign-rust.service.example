@@ -1,0 +1,35 @@
+[Unit]
+Description=NYC MTA Subway Sign (Rust)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/YOUR_USERNAME/subway-sign
+ExecStart=/home/YOUR_USERNAME/subway-sign/subway-sign
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Performance tuning (same as Python display service)
+Nice=-10
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=50
+
+# Resource limits — single binary replaces two Python services
+# Python was ~54MB (display) + ~123MB (gunicorn). Rust target: <30MB total.
+MemoryMax=256M
+OOMScoreAdjust=-500
+
+# Log rate limiting
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=100
+
+# Environment
+Environment=RUST_LOG=subway_sign=info
+
+[Install]
+WantedBy=multi-user.target

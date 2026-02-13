@@ -6,6 +6,9 @@ venv/
 .venv/
 *.egg-info/
 
+# Rust
+target/
+
 # macOS
 .DS_Store
 
