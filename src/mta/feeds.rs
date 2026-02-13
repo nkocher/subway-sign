@@ -4,7 +4,7 @@
 //! `https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs{suffix}`
 
 /// Returns the feed URL suffix for a given route.
-pub fn feed_id_for_route(route: &str) -> Option<&'static str> {
+pub(crate) fn feed_id_for_route(route: &str) -> Option<&'static str> {
     match route {
         // IRT: 1, 2, 3, 4, 5, 6, GS
         "1" | "2" | "3" | "4" | "5" | "6" | "GS" => Some(""),
@@ -29,7 +29,7 @@ pub fn feed_id_for_route(route: &str) -> Option<&'static str> {
 }
 
 /// Base URL for MTA GTFS-RT feeds.
-pub const MTA_FEED_BASE_URL: &str =
+pub(crate) const MTA_FEED_BASE_URL: &str =
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs";
 
 /// Returns deduplicated feed URLs needed for a set of routes.

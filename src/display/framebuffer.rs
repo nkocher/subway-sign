@@ -106,20 +106,24 @@ impl FrameBuffer {
     ) -> usize {
         let font = super::fonts::get_font();
         let mut x_offset: i32 = 0;
-        let chars: Vec<char> = text.chars().collect();
+        let mut chars = text.chars().peekable();
 
-        for (i, &ch) in chars.iter().enumerate() {
+        while let Some(ch) = chars.next() {
             if let Some(bitmap) = font.get_char_bitmap(ch, italic) {
-                self.blit_char(&bitmap, x + x_offset, y, color);
+                self.blit_char(bitmap, x + x_offset, y, color);
             }
 
             let char_width = font.get_char_width(ch, italic) as i32;
 
-            if italic && i + 1 < chars.len() {
-                // Per-character overlap for italic: tighten based on next char's left padding
-                let next_padding = font.get_char_left_padding(chars[i + 1], italic) as i32;
-                let overlap = (next_padding - 2).max(0);
-                x_offset += char_width - overlap + spacing;
+            if italic {
+                if let Some(&next_ch) = chars.peek() {
+                    // Per-character overlap for italic: tighten based on next char's left padding
+                    let next_padding = font.get_char_left_padding(next_ch, italic) as i32;
+                    let overlap = (next_padding - 2).max(0);
+                    x_offset += char_width - overlap + spacing;
+                } else {
+                    x_offset += char_width + spacing;
+                }
             } else {
                 x_offset += char_width + spacing;
             }
@@ -198,7 +202,7 @@ mod tests {
 
         // Check that some pixels were drawn with the icon's color
         let mut found_icon_pixel = false;
-        for y in 5..(5 + icon.height) {
+        for y in 5..(5 + icon.pixels.len()) {
             for x in 10..(10 + icon.width) {
                 let px = fb.get_pixel(x, y);
                 if px != (0, 0, 0) {

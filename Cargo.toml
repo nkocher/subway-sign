@@ -22,14 +22,9 @@ prost-types = "0.13"
 
 # Web framework
 axum = "0.8"
-tower-http = { version = "0.6", features = ["cors", "limit", "timeout"] }
-
 # Shared state
 arc-swap = "1"
 tokio-util = "0.7"
-
-# Config file watching
-notify = "7"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -41,9 +36,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Static file embedding
 rust-embed = "8"
-
-# LRU cache (text rendering)
-lru = "0.12"
 
 # Regex (alert text parsing)
 regex = "1"

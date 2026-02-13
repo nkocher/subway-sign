@@ -59,11 +59,12 @@ pub async fn update_config(
         Ok(_) => {
             info!("[WEB] Config saved");
             state.config.store(Arc::new(new_config));
+            state.config_changed.notify_one();
             (
                 StatusCode::OK,
                 Json(json!({
                     "success": true,
-                    "message": "Configuration saved. Changes apply within 5 seconds."
+                    "message": "Configuration saved and applied."
                 })),
             )
         }
@@ -210,11 +211,6 @@ pub async fn lookup_station(Path(station_name): Path<String>) -> impl IntoRespon
     )
 }
 
-/// GET /api/stations — search/filter stations (legacy endpoint).
-pub async fn get_stations(Query(params): Query<StationSearchParams>) -> impl IntoResponse {
-    get_complete_stations(Query(params)).await
-}
-
 /// POST /api/restart — trigger config reload (not process restart).
 pub async fn restart(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     info!("[WEB] Restart requested — reloading config");
@@ -222,6 +218,7 @@ pub async fn restart(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match Config::load(&state.config_path) {
         Ok(new_config) => {
             state.config.store(Arc::new(new_config));
+            state.config_changed.notify_one();
             Json(json!({
                 "success": true,
                 "message": "Configuration reloaded successfully"

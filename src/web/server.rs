@@ -26,7 +26,7 @@ pub async fn run(state: Arc<AppState>) {
         .route("/api/status", get(handlers::get_status))
         .route("/api/stations/complete", get(handlers::get_complete_stations))
         .route("/api/stations/lookup/{station_name}", get(handlers::lookup_station))
-        .route("/api/stations", get(handlers::get_stations))
+
         .route("/api/debug/snapshot", get(handlers::get_debug_snapshot))
         .route("/api/restart", post(handlers::restart))
         // Static files and index

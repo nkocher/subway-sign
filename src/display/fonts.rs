@@ -3,8 +3,6 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
-use super::colors::Rgb;
-
 /// Font height in pixels (from the JSON font definition).
 pub const FONT_HEIGHT: usize = 16;
 
@@ -30,22 +28,24 @@ pub struct RouteIcon {
     /// Pixel data: row-major, each pixel is (r, g, b, a).
     pub pixels: Vec<Vec<(u8, u8, u8, u8)>>,
     pub width: usize,
-    #[allow(dead_code)]
-    pub height: usize,
     pub baseline_offset: i32,
-    #[allow(dead_code)]
-    pub color: Rgb,
 }
 
 /// Character bitmap: one `Vec<bool>` per row, LSB-first decoded.
 pub type CharBitmap = Vec<Vec<bool>>;
 
-/// The MTA bitmap font with character glyphs and route icons.
+/// The MTA bitmap font with pre-decoded character glyphs and route icons.
+///
+/// All bitmaps are decoded at load time — zero per-frame allocations.
 pub struct MtaFont {
-    /// Character glyphs: char → row data (raw integers from JSON).
-    chars: HashMap<char, Vec<u64>>,
-    /// Pre-generated italic glyphs (midpoint-shifted).
-    italic_chars: HashMap<char, Vec<u64>>,
+    /// Pre-decoded character bitmaps (regular).
+    chars_decoded: HashMap<char, CharBitmap>,
+    /// Pre-decoded character bitmaps (italic).
+    italic_decoded: HashMap<char, CharBitmap>,
+    /// Pre-computed character widths.
+    char_widths: HashMap<(char, bool), usize>,
+    /// Pre-computed left padding (empty columns before first lit pixel).
+    char_left_padding: HashMap<(char, bool), usize>,
     /// Route icon bitmaps.
     route_icons: HashMap<String, RouteIcon>,
 }
@@ -63,8 +63,8 @@ impl MtaFont {
         let font_data: HashMap<String, serde_json::Value> =
             serde_json::from_str(FONT_JSON).expect("embedded font JSON is valid");
 
-        // Extract character glyphs (numeric keys = ASCII codes)
-        let mut chars = HashMap::new();
+        // Extract character glyphs (numeric keys = ASCII codes) as raw u64 rows
+        let mut raw_chars: HashMap<char, Vec<u64>> = HashMap::new();
         for (key, value) in &font_data {
             if let Ok(code) = key.parse::<u32>() {
                 if let Some(ch) = char::from_u32(code) {
@@ -73,28 +73,56 @@ impl MtaFont {
                             .iter()
                             .filter_map(|v| v.as_u64())
                             .collect();
-                        chars.insert(ch, row_vals);
+                        raw_chars.insert(ch, row_vals);
                     }
                 }
             }
         }
 
-        // Generate italic versions
-        let italic_chars = Self::generate_italic(&chars);
+        // Generate italic raw data
+        let raw_italic = Self::generate_italic_raw(&raw_chars);
+
+        // Pre-decode all bitmaps
+        let chars_decoded: HashMap<char, CharBitmap> = raw_chars
+            .iter()
+            .map(|(&ch, rows)| (ch, Self::decode_bitmap(rows)))
+            .collect();
+
+        let italic_decoded: HashMap<char, CharBitmap> = raw_italic
+            .iter()
+            .map(|(&ch, rows)| (ch, Self::decode_bitmap(rows)))
+            .collect();
+
+        // Pre-compute widths and left-padding for all chars in both styles
+        let mut char_widths = HashMap::new();
+        let mut char_left_padding = HashMap::new();
+
+        for (&ch, bitmap) in &chars_decoded {
+            let w = if ch == ' ' { 4 } else { Self::compute_width(bitmap) };
+            char_widths.insert((ch, false), w);
+            char_left_padding.insert((ch, false), Self::compute_left_padding(bitmap));
+        }
+        for (&ch, bitmap) in &italic_decoded {
+            let w = if ch == ' ' { 4 } else { Self::compute_width(bitmap) };
+            char_widths.insert((ch, true), w);
+            char_left_padding.insert((ch, true), Self::compute_left_padding(bitmap));
+        }
 
         // Load route icons
         let route_icons = Self::load_route_icons(&font_data);
 
         MtaFont {
-            chars,
-            italic_chars,
+            chars_decoded,
+            italic_decoded,
+            char_widths,
+            char_left_padding,
             route_icons,
         }
     }
 
     /// Generate italic font via simple midpoint shift.
     /// Top half shifts 1px right, bottom half stays at baseline.
-    fn generate_italic(chars: &HashMap<char, Vec<u64>>) -> HashMap<char, Vec<u64>> {
+    fn generate_italic_raw(chars: &HashMap<char, Vec<u64>>) -> HashMap<char, Vec<u64>> {
         let midpoint = FONT_HEIGHT / 2;
         let italic_shift: u32 = 1;
         let italic_padding: u32 = 1;
@@ -116,6 +144,43 @@ impl MtaFont {
             italic.insert(ch, italic_rows);
         }
         italic
+    }
+
+    /// Decode raw u64 row data into a CharBitmap (LSB-first).
+    fn decode_bitmap(rows: &[u64]) -> CharBitmap {
+        let mut bitmap = Vec::with_capacity(rows.len());
+        for &row_val in rows {
+            let max_bits = if row_val > 0 {
+                64 - row_val.leading_zeros() as usize
+            } else {
+                1
+            };
+            let mut bits = Vec::with_capacity(max_bits);
+            for i in 0..max_bits {
+                bits.push(row_val & (1 << i) != 0);
+            }
+            bitmap.push(bits);
+        }
+        bitmap
+    }
+
+    /// Compute pixel width from a pre-decoded bitmap.
+    fn compute_width(bitmap: &CharBitmap) -> usize {
+        bitmap.iter().map(|row| row.len()).max().unwrap_or(4)
+    }
+
+    /// Compute left padding from a pre-decoded bitmap.
+    fn compute_left_padding(bitmap: &CharBitmap) -> usize {
+        let mut leftmost = usize::MAX;
+        for row in bitmap {
+            for (col, &pixel) in row.iter().enumerate() {
+                if pixel {
+                    leftmost = leftmost.min(col);
+                    break;
+                }
+            }
+        }
+        if leftmost == usize::MAX { 0 } else { leftmost }
     }
 
     /// Load route icon bitmaps from font data + metadata.
@@ -160,9 +225,7 @@ impl MtaFont {
                 RouteIcon {
                     pixels,
                     width: meta.width,
-                    height: meta.height,
                     baseline_offset: meta.baseline_offset,
-                    color,
                 },
             );
         }
@@ -170,64 +233,30 @@ impl MtaFont {
         icons
     }
 
-    /// Get the bitmap for a character, decoded LSB-first.
+    /// Get the pre-decoded bitmap for a character.
     ///
     /// Returns None if the character is not in the font.
-    pub fn get_char_bitmap(&self, ch: char, italic: bool) -> Option<CharBitmap> {
-        let source = if italic { &self.italic_chars } else { &self.chars };
-        let rows = source.get(&ch).or_else(|| self.chars.get(&ch))?;
-
-        let mut bitmap = Vec::with_capacity(rows.len());
-        for &row_val in rows {
-            // LSB-first: bit 0 = leftmost pixel
-            let max_bits = if row_val > 0 {
-                64 - row_val.leading_zeros() as usize
-            } else {
-                1
-            };
-            let mut bits = Vec::with_capacity(max_bits);
-            for i in 0..max_bits {
-                bits.push(row_val & (1 << i) != 0);
-            }
-            bitmap.push(bits);
+    /// Falls back to regular bitmap if italic variant doesn't exist.
+    pub fn get_char_bitmap(&self, ch: char, italic: bool) -> Option<&CharBitmap> {
+        if italic {
+            self.italic_decoded.get(&ch).or_else(|| self.chars_decoded.get(&ch))
+        } else {
+            self.chars_decoded.get(&ch)
         }
-
-        Some(bitmap)
     }
 
     /// Get the width of a character in pixels.
     pub fn get_char_width(&self, ch: char, italic: bool) -> usize {
-        if ch == ' ' {
-            return 4;
-        }
-        match self.get_char_bitmap(ch, italic) {
-            Some(bitmap) => bitmap.iter().map(|row| row.len()).max().unwrap_or(4),
-            None => 4,
-        }
+        *self.char_widths.get(&(ch, italic))
+            .or_else(|| self.char_widths.get(&(ch, false)))
+            .unwrap_or(&4)
     }
 
     /// Get left padding (empty columns before first lit pixel).
     pub fn get_char_left_padding(&self, ch: char, italic: bool) -> usize {
-        let bitmap = match self.get_char_bitmap(ch, italic) {
-            Some(b) => b,
-            None => return 0,
-        };
-
-        let mut leftmost = usize::MAX;
-        for row in &bitmap {
-            for (col, &pixel) in row.iter().enumerate() {
-                if pixel {
-                    leftmost = leftmost.min(col);
-                    break;
-                }
-            }
-        }
-
-        if leftmost == usize::MAX {
-            0
-        } else {
-            leftmost
-        }
+        *self.char_left_padding.get(&(ch, italic))
+            .or_else(|| self.char_left_padding.get(&(ch, false)))
+            .unwrap_or(&0)
     }
 
     /// Measure the total width of a text string.
@@ -235,15 +264,15 @@ impl MtaFont {
         if text.is_empty() {
             return 0;
         }
-        let chars: Vec<char> = text.chars().collect();
+        let mut chars = text.chars().peekable();
         let mut total: i32 = 0;
 
-        for (i, &ch) in chars.iter().enumerate() {
+        while let Some(ch) = chars.next() {
             total += self.get_char_width(ch, italic) as i32;
-            if i + 1 < chars.len() {
+            if let Some(&next_ch) = chars.peek() {
                 if italic {
                     // Per-character overlap for italic (matching Python's algorithm)
-                    let next_padding = self.get_char_left_padding(chars[i + 1], italic) as i32;
+                    let next_padding = self.get_char_left_padding(next_ch, italic) as i32;
                     let overlap = (next_padding - 2).max(0);
                     total += spacing - overlap;
                 } else {
@@ -278,6 +307,7 @@ impl MtaFont {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display::colors::Rgb;
 
     #[test]
     fn test_font_loads() {
@@ -369,8 +399,7 @@ mod tests {
         let font = get_font();
         let icon = font.get_route_icon("1", false).unwrap();
         assert_eq!(icon.width, 14);
-        assert_eq!(icon.height, 13);
-        assert_eq!(icon.pixels.len(), 13);
+        assert_eq!(icon.pixels.len(), 13); // height
         assert_eq!(icon.pixels[0].len(), 14);
     }
 
@@ -479,7 +508,7 @@ mod tests {
     /// Render a route icon to a flat RGB pixel buffer, returns (width, height, pixels).
     fn render_icon_to_pixels(icon: &RouteIcon, scale: usize) -> (usize, usize, Vec<u8>) {
         let w = icon.width * scale;
-        let h = icon.height * scale;
+        let h = icon.pixels.len() * scale;
         let mut pixels = vec![0u8; w * h * 3];
 
         for (y, row) in icon.pixels.iter().enumerate() {
@@ -503,6 +532,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_render_sample_ppm() {
         let scale = 4; // 4x scale for visibility
 

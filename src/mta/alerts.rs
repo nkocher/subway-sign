@@ -5,7 +5,7 @@ use crate::models::Alert;
 
 /// GTFS-RT effect enum → priority mapping.
 /// Lower number = higher priority (more critical).
-fn effect_priority(effect_value: i32) -> i32 {
+pub(crate) fn effect_priority(effect_value: i32) -> i32 {
     match effect_value {
         1 => 1,  // NO_SERVICE
         2 => 2,  // REDUCED_SERVICE
@@ -18,11 +18,6 @@ fn effect_priority(effect_value: i32) -> i32 {
         9 => 9,  // STOP_MOVED
         _ => 10, // Unknown
     }
-}
-
-/// Convert GTFS-RT effect enum to priority score.
-pub fn extract_priority_from_effect(effect_value: i32) -> i32 {
-    effect_priority(effect_value)
 }
 
 /// Cooldown period — don't show same alert for this long.
@@ -106,7 +101,7 @@ impl AlertManager {
     }
 
     /// Advance to the next alert in the queue.
-    pub fn advance_queue(&mut self) {
+    fn advance_queue(&mut self) {
         if !self.queue.is_empty() {
             self.queue_index = (self.queue_index + 1) % self.queue.len();
         }
@@ -137,7 +132,8 @@ impl AlertManager {
     }
 
     /// Number of alerts currently in queue.
-    pub fn queue_size(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn queue_size(&self) -> usize {
         self.queue.len()
     }
 
@@ -192,9 +188,9 @@ mod tests {
 
     #[test]
     fn test_effect_priority() {
-        assert_eq!(extract_priority_from_effect(1), 1); // NO_SERVICE
-        assert_eq!(extract_priority_from_effect(3), 3); // SIGNIFICANT_DELAYS
-        assert_eq!(extract_priority_from_effect(99), 10); // Unknown
+        assert_eq!(effect_priority(1), 1); // NO_SERVICE
+        assert_eq!(effect_priority(3), 3); // SIGNIFICANT_DELAYS
+        assert_eq!(effect_priority(99), 10); // Unknown
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub struct AppState {
     pub alert_manager: Mutex<AlertManager>,
     pub config_path: PathBuf,
     pub shutdown: CancellationToken,
+    pub config_changed: tokio::sync::Notify,
 }
 
 #[tokio::main]
@@ -71,6 +72,7 @@ async fn main() {
         alert_manager: Mutex::new(AlertManager::new()),
         config_path: config_path.clone(),
         shutdown: CancellationToken::new(),
+        config_changed: tokio::sync::Notify::new(),
     });
 
     // Spawn fetch task
@@ -128,6 +130,46 @@ fn find_config_path() -> PathBuf {
     PathBuf::from("config.json")
 }
 
+/// Fetch trains for the current config and update the snapshot.
+async fn do_train_fetch(
+    client: &mut MtaClient,
+    state: &AppState,
+    cached_alerts: &[models::Alert],
+    last_train_count: &mut i32,
+) {
+    let config = state.config.load();
+
+    let all_stop_ids: Vec<String> = config
+        .station_stops
+        .iter()
+        .flat_map(|(up, down)| vec![up.clone(), down.clone()])
+        .collect();
+
+    let routes: HashSet<String> = config.routes.iter().cloned().collect();
+
+    let trains = client
+        .fetch_trains(&all_stop_ids, &routes, config.display.max_trains as usize)
+        .await;
+
+    let train_count = trains.len() as i32;
+
+    let snapshot = DisplaySnapshot {
+        trains,
+        alerts: cached_alerts.to_vec(),
+        fetched_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64(),
+    };
+
+    state.snapshot.store(Arc::new(snapshot));
+
+    if train_count != *last_train_count {
+        info!("[FETCH] {} trains fetched", train_count);
+        *last_train_count = train_count;
+    }
+}
+
 /// Background fetch task — runs train + alert fetches on separate intervals.
 async fn fetch_task(state: Arc<AppState>) {
     let mut client = MtaClient::new();
@@ -154,6 +196,10 @@ async fn fetch_task(state: Arc<AppState>) {
                 info!("[FETCH] Shutting down");
                 break;
             }
+            _ = state.config_changed.notified() => {
+                info!("[FETCH] Config changed — re-fetching");
+                do_train_fetch(&mut client, &state, &cached_alerts, &mut last_train_count).await;
+            }
             _ = alert_interval.tick() => {
                 let config = state.config.load();
                 if config.display.show_alerts {
@@ -165,39 +211,7 @@ async fn fetch_task(state: Arc<AppState>) {
                 }
             }
             _ = train_interval.tick() => {
-                let config = state.config.load();
-
-                let all_stop_ids: Vec<String> = config
-                    .station_stops
-                    .iter()
-                    .flat_map(|(up, down)| vec![up.clone(), down.clone()])
-                    .collect();
-
-                let routes: HashSet<String> = config.routes.iter().cloned().collect();
-
-                let trains = client.fetch_trains(
-                    &all_stop_ids,
-                    &routes,
-                    config.display.max_trains as usize,
-                ).await;
-
-                let train_count = trains.len() as i32;
-
-                let snapshot = DisplaySnapshot {
-                    trains,
-                    alerts: cached_alerts.clone(),
-                    fetched_at: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs_f64(),
-                };
-
-                state.snapshot.store(Arc::new(snapshot));
-
-                if train_count != last_train_count {
-                    info!("[FETCH] {} trains fetched", train_count);
-                    last_train_count = train_count;
-                }
+                do_train_fetch(&mut client, &state, &cached_alerts, &mut last_train_count).await;
             }
         }
     }
@@ -232,6 +246,7 @@ async fn config_watcher_task(state: Arc<AppState>) {
                                 new_config.routes.join(",")
                             );
                             state.config.store(Arc::new(new_config));
+                            state.config_changed.notify_one();
                             last_mtime = current_mtime;
                         }
                         Err(e) => {
@@ -249,12 +264,12 @@ async fn config_watcher_task(state: Arc<AppState>) {
 /// Tracks whether an alert is currently showing, which alert it is,
 /// the scroll position, and what train triggered the alert cycle.
 /// Extracted from the render loop to reduce parameter sprawl.
-pub struct AlertState {
-    pub show_alert: bool,
-    pub current_alert: Option<Alert>,
-    pub scroll_offset: f32,
-    pub triggered_by: Option<(String, String)>,
-    pub cycle_start_time: Instant,
+struct AlertState {
+    show_alert: bool,
+    current_alert: Option<Alert>,
+    scroll_offset: f32,
+    triggered_by: Option<(String, String)>,
+    cycle_start_time: Instant,
 }
 
 impl AlertState {
@@ -291,6 +306,11 @@ impl AlertState {
     ) {
         let first_train = snapshot.get_first_train();
         let train_at_zero = first_train.minutes == 0;
+
+        // Skip mutex entirely when no alerts are active and none could trigger
+        if !train_at_zero && !self.show_alert {
+            return;
+        }
 
         // Check if the train that triggered alerts has departed
         let triggering_train_departed = self.show_alert
@@ -374,17 +394,22 @@ impl AlertState {
 /// - spawn_blocking is for short-lived operations, not permanent loops
 fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     let config = state.config.load();
-    let brightness = (config.display.brightness * 100.0) as u8;
+    let brightness = (config.display.brightness * 100.0).round() as u8;
+    let brightness = brightness.clamp(1, 100);
     let mut display = create_display(brightness);
     let mut renderer = Renderer::new();
     let mut alert_state = AlertState::new();
 
+    let mut current_brightness = brightness;
     let mut cycle_index: usize = 0;
     let mut flash_state = false;
 
     let mut last_cycle_time = Instant::now();
     let mut last_flash_time = Instant::now();
     let mut frame_count: u64 = 0;
+    let mut missed_frames: u64 = 0;
+    let mut max_frame_us: u64 = 0;
+    let mut total_frame_us: u64 = 0;
     let mut last_stats_time = Instant::now();
 
     const TARGET_FPS: f64 = 60.0;
@@ -392,7 +417,8 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
         std::time::Duration::from_nanos((1_000_000_000.0 / TARGET_FPS) as u64);
     const CYCLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
     const FLASH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
-    const SCROLL_SPEED: f32 = 1.0;
+    const SCROLL_PX_PER_SEC: f32 = 60.0;
+    const SCROLL_SPEED: f32 = SCROLL_PX_PER_SEC / TARGET_FPS as f32;
     const MAX_ALERT_CYCLE_DURATION: std::time::Duration = std::time::Duration::from_secs(90);
     const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
 
@@ -438,23 +464,48 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
         // Push to display
         display.swap(&frame);
 
+        // Measure work time (render + swap/vsync) before compensating sleep
+        let work_time = frame_start.elapsed();
+        let work_us = work_time.as_micros() as u64;
+        total_frame_us += work_us;
+        if work_us > max_frame_us {
+            max_frame_us = work_us;
+        }
+        if work_time > FRAME_TIME {
+            missed_frames += 1;
+        }
+
         frame_count += 1;
+
+        // Poll for brightness changes every ~1 second (60 frames)
+        if frame_count.is_multiple_of(60) {
+            let cfg = state.config.load();
+            let new_brightness = (cfg.display.brightness * 100.0).round() as u8;
+            let new_brightness = new_brightness.clamp(1, 100);
+            if new_brightness != current_brightness {
+                display.set_brightness(new_brightness);
+                current_brightness = new_brightness;
+                info!("[RENDER] Brightness updated to {}%", new_brightness);
+            }
+        }
 
         // Stats logging every 5 minutes
         if last_stats_time.elapsed() >= STATS_INTERVAL {
             let fps = frame_count as f64 / last_stats_time.elapsed().as_secs_f64();
             info!(
-                "[STATS] FPS: {:.1} | Trains: {} | Alerts: {} | Snapshot age: {:.1}s",
+                "[STATS] FPS: {:.1} | Missed: {}/{} ({:.1}%) | Frame: avg {:.1}ms, max {:.1}ms | Trains: {} | Alerts: {}",
                 fps,
+                missed_frames, frame_count,
+                if frame_count > 0 { missed_frames as f64 / frame_count as f64 * 100.0 } else { 0.0 },
+                if frame_count > 0 { total_frame_us as f64 / frame_count as f64 / 1000.0 } else { 0.0 },
+                max_frame_us as f64 / 1000.0,
                 snapshot.trains.len(),
                 snapshot.alerts.len(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs_f64()
-                    - snapshot.fetched_at,
             );
             frame_count = 0;
+            missed_frames = 0;
+            max_frame_us = 0;
+            total_frame_us = 0;
             last_stats_time = Instant::now();
         }
 
@@ -522,6 +573,7 @@ mod tests {
             alert_manager: Mutex::new(am),
             config_path: PathBuf::from("config.json"),
             shutdown: CancellationToken::new(),
+            config_changed: tokio::sync::Notify::new(),
         })
     }
 

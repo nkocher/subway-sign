@@ -28,6 +28,9 @@ use super::framebuffer::FrameBuffer;
 pub trait DisplayTarget: Send {
     /// Push a rendered frame to the display.
     fn swap(&mut self, frame: &FrameBuffer);
+
+    /// Update display brightness (0-100).
+    fn set_brightness(&mut self, brightness: u8);
 }
 
 // ---------------------------------------------------------------------------
@@ -38,10 +41,9 @@ mod hw {
     use super::{DisplayTarget, FrameBuffer};
     use rpi_led_matrix::{LedCanvas, LedMatrix, LedMatrixOptions, LedRuntimeOptions};
 
-    // Direct FFI to hzeller's C API for bulk pixel transfer.
-    // The rpi-led-matrix crate only exposes per-pixel set(), but the C library
-    // has set_image() which copies an entire RGB buffer in one call.
-    // This reduces FFI overhead from 6,144 calls/frame to 1 call/frame.
+    // Direct FFI to hzeller's C API.
+    // set_image: bulk pixel transfer (reduces per-frame FFI from 6,144 calls to 1).
+    // led_matrix_{set,get}_brightness: runtime brightness control (not exposed by crate).
     extern "C" {
         fn set_image(
             canvas: *mut std::ffi::c_void,
@@ -53,6 +55,8 @@ mod hw {
             image_height: std::ffi::c_int,
             is_bgr: std::ffi::c_char,
         );
+        fn led_matrix_set_brightness(matrix: *mut std::ffi::c_void, brightness: u8);
+        fn led_matrix_get_brightness(matrix: *mut std::ffi::c_void) -> u8;
     }
 
     /// Real LED matrix display using hzeller's rpi-rgb-led-matrix via the
@@ -60,6 +64,7 @@ mod hw {
     pub struct LedMatrixDisplay {
         matrix: LedMatrix,
         canvas: Option<LedCanvas>,
+        matrix_ptr: *mut std::ffi::c_void,
     }
 
     impl LedMatrixDisplay {
@@ -73,6 +78,9 @@ mod hw {
             let _ = options.set_hardware_mapping("regular");
             let _ = options.set_pwm_bits(11);
             let _ = options.set_pwm_lsb_nanoseconds(130);
+            let _ = options.set_pwm_dither_bits(0);
+            let _ = options.set_limit_refresh(120);
+            options.set_hardware_pulsing(true);
             let _ = options.set_brightness(brightness);
             options.set_refresh_rate(false); // suppress Hz spam on stdout
 
@@ -85,14 +93,28 @@ mod hw {
 
             let canvas = matrix.offscreen_canvas();
 
+            // Extract raw matrix pointer for runtime brightness control.
+            // LedMatrix layout: first field is `handle: *mut CLedMatrix`.
+            // Verified by reading back the brightness we just set.
+            let matrix_ptr = unsafe {
+                *(&matrix as *const LedMatrix as *const *mut std::ffi::c_void)
+            };
+            let readback = unsafe { led_matrix_get_brightness(matrix_ptr) };
+            assert_eq!(
+                readback, brightness,
+                "LedMatrix pointer extraction failed — brightness mismatch ({} != {})",
+                readback, brightness
+            );
+
             tracing::info!(
-                "LED matrix initialized (192x32, brightness={}%)",
-                brightness
+                "LED matrix initialized (192x32, brightness={}%, pulsing=hw, pwm={}/{}ns, dither=0, refresh_cap=120Hz)",
+                brightness, 11, 130
             );
 
             LedMatrixDisplay {
                 matrix,
                 canvas: Some(canvas),
+                matrix_ptr,
             }
         }
     }
@@ -116,7 +138,7 @@ mod hw {
                 // *mut CLedCanvas. We read the pointer value without moving
                 // or dropping the LedCanvas struct. The size assertion
                 // verifies this assumption holds.
-                debug_assert_eq!(
+                assert_eq!(
                     std::mem::size_of::<LedCanvas>(),
                     std::mem::size_of::<*mut std::ffi::c_void>(),
                     "LedCanvas layout changed — set_image FFI assumption broken"
@@ -146,6 +168,10 @@ mod hw {
                 self.canvas = Some(self.matrix.swap(canvas));
             }
         }
+
+        fn set_brightness(&mut self, brightness: u8) {
+            unsafe { led_matrix_set_brightness(self.matrix_ptr, brightness); }
+        }
     }
 }
 
@@ -153,9 +179,7 @@ mod hw {
 // Mock implementation (macOS dev)
 // ---------------------------------------------------------------------------
 /// Mock display for development on macOS (no hardware).
-pub struct MockDisplay {
-    frame_count: u64,
-}
+pub struct MockDisplay;
 
 impl MockDisplay {
     pub fn new(brightness: u8) -> Self {
@@ -163,16 +187,14 @@ impl MockDisplay {
             "Mock display initialized (192x32, brightness={})",
             brightness
         );
-        MockDisplay {
-            frame_count: 0,
-        }
+        MockDisplay
     }
 }
 
 impl DisplayTarget for MockDisplay {
-    fn swap(&mut self, _frame: &FrameBuffer) {
-        self.frame_count += 1;
-    }
+    fn swap(&mut self, _frame: &FrameBuffer) {}
+
+    fn set_brightness(&mut self, _brightness: u8) {}
 }
 
 // ---------------------------------------------------------------------------

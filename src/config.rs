@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::Path;
 
 use crate::models::{stop_ids_to_station_stops, StationStop};
@@ -31,7 +31,7 @@ struct RawStationPair {
 }
 
 /// Display settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct DisplayConfig {
     pub brightness: f64,
     pub max_trains: u32,
@@ -39,7 +39,7 @@ pub struct DisplayConfig {
 }
 
 /// Refresh intervals (optional in config file).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct RefreshConfig {
     #[serde(default = "default_trains_interval")]
     pub trains_interval: u64,

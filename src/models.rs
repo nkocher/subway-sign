@@ -1,26 +1,11 @@
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 /// Direction a train is traveling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Direction {
     Uptown,   // N
     Downtown, // S
-}
-
-impl Direction {
-    pub fn from_code(code: &str) -> Self {
-        match code {
-            "S" => Direction::Downtown,
-            _ => Direction::Uptown,
-        }
-    }
-
-    pub fn code(&self) -> &'static str {
-        match self {
-            Direction::Uptown => "N",
-            Direction::Downtown => "S",
-        }
-    }
 }
 
 /// A single train arrival.
@@ -36,11 +21,6 @@ pub struct Train {
 }
 
 impl Train {
-    /// Check if this represents real train data (not a placeholder).
-    pub fn is_valid(&self) -> bool {
-        self.minutes < 999 && !self.route.is_empty()
-    }
-
     /// Create an empty placeholder train.
     pub fn empty() -> Self {
         Train {
@@ -86,8 +66,11 @@ impl DisplaySnapshot {
     }
 
     /// Get the next arriving train (any direction).
-    pub fn get_first_train(&self) -> Train {
-        self.trains.first().cloned().unwrap_or_else(Train::empty)
+    pub fn get_first_train(&self) -> &Train {
+        static EMPTY_TRAIN: OnceLock<Train> = OnceLock::new();
+        self.trains.first().unwrap_or_else(||
+            EMPTY_TRAIN.get_or_init(Train::empty)
+        )
     }
 
     /// Get trains #2 through #(count+1) for bottom row cycling.
@@ -148,36 +131,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_direction_from_code() {
-        assert_eq!(Direction::from_code("N"), Direction::Uptown);
-        assert_eq!(Direction::from_code("S"), Direction::Downtown);
-        assert_eq!(Direction::from_code("X"), Direction::Uptown); // default
-    }
-
-    #[test]
-    fn test_direction_code() {
-        assert_eq!(Direction::Uptown.code(), "N");
-        assert_eq!(Direction::Downtown.code(), "S");
-    }
-
-    #[test]
-    fn test_train_is_valid() {
-        let valid = Train {
-            route: "1".into(),
-            destination: "Uptown".into(),
-            minutes: 3,
-            is_express: false,
-            arrival_timestamp: 1000.0,
-            direction: Direction::Uptown,
-            stop_id: "127N".into(),
-        };
-        assert!(valid.is_valid());
-
-        let empty = Train::empty();
-        assert!(!empty.is_valid());
-    }
-
-    #[test]
     fn test_display_snapshot_empty() {
         let snap = DisplaySnapshot::empty();
         assert!(snap.trains.is_empty());
@@ -189,7 +142,7 @@ mod tests {
     fn test_get_first_train_empty() {
         let snap = DisplaySnapshot::empty();
         let first = snap.get_first_train();
-        assert!(!first.is_valid());
+        assert_eq!(first.minutes, 999);
         assert_eq!(first.destination, "---");
     }
 
@@ -242,7 +195,7 @@ mod tests {
         // Only 1 train total, so cycling skips it → all padding
         let cycling = snap.get_cycling_trains(6);
         assert_eq!(cycling.len(), 6);
-        assert!(!cycling[0].is_valid()); // all empty
+        assert_eq!(cycling[0].minutes, 999); // all empty
     }
 
     #[test]

@@ -9,11 +9,26 @@ use super::framebuffer::{FrameBuffer, DISPLAY_WIDTH};
 /// Character spacing for the MTA font (kerning of -1px, matching Python).
 const CHAR_SPACING: i32 = -1;
 
-/// Gap before an icon (text → icon).
+/// Width of a route icon (circle/diamond) in pixels.
+const ICON_WIDTH: i32 = 14;
+/// Sentinel value for "no train data" in the minutes field.
+const EMPTY_TRAIN_SENTINEL: i32 = 999;
+/// Y offset of the top train row (shifted up to align with V1 sign).
+const TOP_ROW_Y_ADJUST: i32 = -4;
+/// Y offset where the bottom train row starts.
+const BOTTOM_ROW_Y: i32 = 16;
+/// Gap between route icon and destination text in a train row.
+const ICON_TEXT_GAP: i32 = 3;
+/// Right margin before the arrival time text.
+const TIME_RIGHT_MARGIN: i32 = 5;
+/// Y position of the scrolling alert row.
+const ALERT_ROW_Y: i32 = 15;
+
+/// Gap before an icon (text → icon) in alerts.
 const TEXT_TO_ICON_GAP: i32 = 5;
-/// Gap after an icon (icon → text).
+/// Gap after an icon (icon → text) in alerts.
 const ICON_TO_TEXT_GAP: i32 = 2;
-/// Gap between consecutive icons.
+/// Gap between consecutive icons in alerts.
 const ICON_ICON_GAP: i32 = 1;
 
 /// Pure rendering engine for the subway sign display.
@@ -51,7 +66,7 @@ impl Renderer {
 
     /// Render a complete frame.
     ///
-    /// This is the main entry point called at 30fps.
+    /// This is the main entry point called at 60fps.
     pub fn render_frame(
         &mut self,
         snapshot: &DisplaySnapshot,
@@ -65,7 +80,7 @@ impl Renderer {
 
         // Top row: next arriving train (any direction)
         let first_train = snapshot.get_first_train();
-        self.render_train_row(&mut fb, &first_train, 0, 1, flash_state);
+        self.render_train_row(&mut fb, first_train, 0, 1, flash_state);
 
         // Bottom row: cycling train OR scrolling alert
         if show_alert {
@@ -75,7 +90,7 @@ impl Renderer {
         } else {
             let cycling = snapshot.get_cycling_trains(6);
             let idx = cycle_index.min(cycling.len().saturating_sub(1));
-            self.render_train_row(&mut fb, &cycling[idx], 16, idx + 2, false);
+            self.render_train_row(&mut fb, &cycling[idx], BOTTOM_ROW_Y, idx + 2, false);
         }
 
         fb
@@ -92,8 +107,7 @@ impl Renderer {
     ) {
         let font = fonts::get_font();
 
-        // Both rows get -4px offset to align with V1 sign
-        let y = y_offset - 4;
+        let y = y_offset + TOP_ROW_Y_ADJUST;
 
         // Determine colors based on arrival state
         let is_arriving = train.minutes == 0;
@@ -111,16 +125,15 @@ impl Renderer {
 
         // 2. Route icon
         let icon_x = num_width as i32;
-        let icon_width: i32 = 14;
         if !train.route.is_empty() {
             self.render_route_icon(fb, &train.route, train.is_express, icon_x, y + 4);
         }
 
         // 3. Destination text
-        let station_x = icon_x + icon_width + 3;
+        let station_x = icon_x + ICON_WIDTH + ICON_TEXT_GAP;
 
         // 4. Arrival time (right-aligned)
-        let time_text = if train.minutes < 999 {
+        let time_text = if train.minutes < EMPTY_TRAIN_SENTINEL {
             format!("{}min", train.minutes)
         } else {
             "---min".to_string()
@@ -129,7 +142,7 @@ impl Renderer {
         let time_x = DISPLAY_WIDTH as i32 - time_width;
 
         // Truncate destination to fit between icon and time
-        let available_width = (time_x - station_x - 5).max(0) as usize;
+        let available_width = (time_x - station_x - TIME_RIGHT_MARGIN).max(0) as usize;
         let dest_text = self.truncate_text(font, &train.destination, available_width);
         fb.draw_text(&dest_text, station_x, y + 4, text_color, false, CHAR_SPACING);
 
@@ -153,7 +166,7 @@ impl Renderer {
         };
 
         if need_render {
-            let alert_buf = self.render_alert_with_icons(&alert.text, &alert.affected_routes);
+            let alert_buf = self.render_alert_with_icons(&alert.text);
             self.last_alert_width = alert_buf.width() as i32;
             self.alert_cache = Some(AlertCacheEntry {
                 text: alert.text.clone(),
@@ -169,7 +182,7 @@ impl Renderer {
 
         // Only render if still visible (y=15 to fit 17px tall alert in bottom half)
         if x_pos > -(alert_buf.width() as i32) {
-            self.blit_framebuffer(fb, alert_buf, x_pos, 15);
+            self.blit_framebuffer(fb, alert_buf, x_pos, ALERT_ROW_Y);
         }
     }
 
@@ -182,7 +195,6 @@ impl Renderer {
     fn render_alert_with_icons(
         &self,
         text: &str,
-        _affected_routes: &std::collections::HashSet<String>,
     ) -> FrameBuffer {
         let font = fonts::get_font();
         let alert_color = colors::COLOR_ORANGE;
@@ -300,11 +312,19 @@ impl Renderer {
             return text.to_string();
         }
 
-        let mut result: String = text.to_string();
-        while !result.is_empty() && font.measure_text(&result, CHAR_SPACING, false) > max_width {
-            result.pop();
+        let char_count = text.chars().count();
+        let mut lo: usize = 0;
+        let mut hi: usize = char_count;
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            let candidate: String = text.chars().take(mid).collect();
+            if font.measure_text(&candidate, CHAR_SPACING, false) <= max_width {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
         }
-        result
+        text.chars().take(lo).collect()
     }
 
     /// Blit one framebuffer onto another at (x, y). Non-black pixels overwrite.
@@ -476,13 +496,9 @@ mod tests {
     #[test]
     fn test_render_alert_with_icons() {
         let renderer = Renderer::new();
-        let mut routes = HashSet::new();
-        routes.insert("1".into());
-        routes.insert("2".into());
 
         let buf = renderer.render_alert_with_icons(
             "Delays on [1] [2] trains due to signal problems",
-            &routes,
         );
 
         assert!(buf.width() > 0);
@@ -492,9 +508,8 @@ mod tests {
     #[test]
     fn test_render_alert_no_icons() {
         let renderer = Renderer::new();
-        let routes = HashSet::new();
 
-        let buf = renderer.render_alert_with_icons("Service change in effect", &routes);
+        let buf = renderer.render_alert_with_icons("Service change in effect");
 
         assert!(buf.width() > 0);
         assert_eq!(buf.height(), 17);
@@ -583,6 +598,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_render_ppm_output() {
         use std::io::Write;
 

@@ -7,7 +7,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
 use crate::models::{Alert, Direction, Train};
-use crate::mta::alerts::extract_priority_from_effect;
+use crate::mta::alerts::effect_priority;
 use crate::mta::feeds;
 
 /// Generated protobuf types from gtfs-realtime.proto.
@@ -105,7 +105,7 @@ impl MtaClient {
         // Collect results
         while let Some(result) = join_set.join_next().await {
             match result {
-                Ok((url, Ok((trains, _timestamp)))) => {
+                Ok((url, Ok(trains))) => {
                     self.record_success(&url);
                     self.feed_cache.insert(
                         url,
@@ -229,7 +229,7 @@ impl MtaClient {
 
             let priority = alert_proto
                 .effect
-                .map(extract_priority_from_effect)
+                .map(effect_priority)
                 .unwrap_or(10);
 
             if let Some(ref header_text) = alert_proto.header_text {
@@ -310,7 +310,7 @@ async fn fetch_single_feed(
     url: &str,
     stop_ids: &[String],
     routes: &HashSet<String>,
-) -> Result<(Vec<Train>, u64), String> {
+) -> Result<Vec<Train>, String> {
     let response = http
         .get(url)
         .send()
@@ -325,7 +325,6 @@ async fn fetch_single_feed(
     let feed = transit_realtime::FeedMessage::decode(bytes.as_ref())
         .map_err(|e| format!("Protobuf decode error: {}", e))?;
 
-    let feed_timestamp = feed.header.timestamp.unwrap_or(0);
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -397,7 +396,7 @@ async fn fetch_single_feed(
     }
 
     debug!("Feed {} returned {} trains", url, trains.len());
-    Ok((trains, feed_timestamp))
+    Ok(trains)
 }
 
 /// Detect if a train is running express service.

@@ -18,13 +18,22 @@ Single Rust binary running on a 4GB Raspberry Pi. tokio async runtime for I/O ta
 
 - **DisplayTarget trait:** `hardware` feature compiles `LedMatrixDisplay` (Pi GPIO), `mock` feature (default) compiles `MockDisplay` (no-op, for macOS dev).
 - **Render loop:** 60fps, 1px/frame scrolling. `set_image()` bulk FFI call keeps render thread at ~5% CPU. hzeller's GPIO thread uses ~73% CPU (expected, hard real-time PWM).
-- **Panel layout:** 3 chained 64x32 panels = 192x32 total. PWM bits: 11, LSB nanoseconds: 130, GPIO slowdown: 3.
+- **Panel layout:** 3 chained 64x32 panels = 192x32 total. PWM bits: 11, LSB nanoseconds: 130, GPIO slowdown: 3. Hardware pulsing enabled (`set_hardware_pulsing(true)`) — required for stable display; the crate defaults to software pulsing which causes visible jitter.
+- **Stats line** (every 5min): FPS, missed frames (work exceeded 16.67ms budget), avg/max frame time, train/alert counts.
 
 ## Web
 
 - **axum server** (replaces Flask/gunicorn). Runs on 0.0.0.0:5001.
 - **rust-embed** for static files (HTML, CSS, JS, icons). All web assets compiled into the binary.
-- **API endpoints:** `/api/config` (GET/POST), `/api/status`, `/api/stations`, `/api/debug/snapshot`, `/api/restart`.
+- **API endpoints:** `/api/config` (GET/POST), `/api/status`, `/api/stations/complete`, `/api/debug/snapshot`, `/api/restart`.
+
+## Font System
+
+- **Pre-decoded at load time.** All character bitmaps, widths, and left-padding are computed once during `MtaFont::load()` and stored in HashMaps. Zero per-frame heap allocations for text rendering.
+- **`get_char_bitmap` returns `Option<&CharBitmap>`** (borrowed reference), not owned. Callers should not add `&` when passing to `blit_char`.
+- **Space character special case.** Space has all-zero rows in font JSON — bitmap width computes to 1. Width is hardcoded to 4 during pre-computation.
+- **Italic fallback.** If italic variant doesn't exist for a char, accessors fall back to regular. This applies to HashMap lookups too (use `.or_else()`).
+- **LSB-first for chars, MSB-first for icons.** Two different bit orderings in the same font file.
 
 ## Build
 
@@ -35,10 +44,16 @@ cargo test
 cargo clippy
 ```
 
+**Clippy note:** ~24 warnings from generated protobuf code (`transit_realtime.rs`) are expected. Only `src/` warnings matter.
+
 **Pi hardware (native compilation):**
 ```bash
 cargo build --release --features hardware --no-default-features
 ```
+
+Hardware builds emit 2 warnings about unused `MockDisplay` — this is expected (mock code is excluded by feature flags but still compiled).
+
+**Pi build times:** Full rebuild ~4-5 min (ARM CPU). Dep changes trigger full rebuild. Use `timeout: 600000` on deploy Bash commands.
 
 Binary location: `target/release/subway-sign`
 
@@ -50,6 +65,7 @@ Cross-compilation not supported. Build directly on the Pi.
 - **CPU:** Render thread ~5%, hzeller GPIO thread ~73% (expected).
 - **Intervals:** Train fetch 20s, alert fetch 60s, config poll 5s, stats log 300s.
 - **Render:** 60fps, 1px/frame scroll. Alert display triggered on train arrival (minutes == 0).
+- **Tests:** 73 pass, 2 ignored (PPM visual tests that write to /tmp).
 
 ## Stability Patterns
 
@@ -82,6 +98,8 @@ ssh admin@192.168.0.40 "sudo systemctl restart subway-sign.service"
 ```
 
 `deploy.sh` is gitignored — create it from `deploy.example.sh` with `PI_HOST="admin@192.168.0.40"` and `PI_PATH="/home/admin/subway-sign-rust"`.
+
+`deploy.sh` rsyncs from CWD — must run from the worktree root, not the parent project.
 
 The deploy script should:
 1. rsync code to Pi
