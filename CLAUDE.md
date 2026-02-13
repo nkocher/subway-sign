@@ -25,7 +25,9 @@ Single Rust binary running on a 4GB Raspberry Pi. tokio async runtime for I/O ta
 
 - **axum server** on 0.0.0.0:5001.
 - **rust-embed** for static files (HTML, CSS, JS, icons). All web assets compiled into the binary.
-- **API endpoints:** `/api/config` (GET/POST), `/api/status`, `/api/stations/complete`, `/api/debug/snapshot`, `/api/restart`.
+- **API endpoints:** `/api/config` (GET/POST), `/api/status`, `/api/healthz`, `/api/stations/complete`, `/api/debug/snapshot`, `/api/restart`.
+- **Atomic config writes:** write→.tmp, fsync, backup→.bak, rename. `Config::load` falls back to `.bak` if primary is corrupt.
+- **Service worker** caches static assets only; `/api/*` routes bypass cache (network-only).
 
 ## Font System
 
@@ -44,7 +46,7 @@ cargo test
 cargo clippy
 ```
 
-**Clippy note:** ~24 warnings from generated protobuf code (`transit_realtime.rs`) are expected. Only `src/` warnings matter.
+**Clippy note:** Protobuf warnings suppressed with `#[allow(clippy::all)]` on `transit_realtime` module. `cargo clippy --all-targets -- -D warnings` should pass cleanly.
 
 **Pi hardware (native compilation):**
 ```bash
@@ -65,7 +67,7 @@ Cross-compilation not supported. Build directly on the Pi.
 - **CPU:** Render thread ~5%, hzeller GPIO thread ~73% (expected).
 - **Intervals:** Train fetch 20s, alert fetch 60s, config poll 5s, stats log 300s.
 - **Render:** 60fps, 1px/frame scroll. Alert display triggered on train arrival (minutes == 0).
-- **Tests:** 73 pass, 2 ignored (PPM visual tests that write to /tmp).
+- **Tests:** 76 pass, 2 ignored (PPM visual tests that write to /tmp).
 
 ## Stability Patterns
 
@@ -81,6 +83,13 @@ Cross-compilation not supported. Build directly on the Pi.
 
 **Pi:** `admin@192.168.0.40` at `/home/admin/subway-sign-rust`
 **OS:** Debian Trixie (Rust toolchain via rustup)
+
+### File permissions
+
+hzeller drops privileges from root to `daemon` after GPIO init. The process runs as `daemon`, not `root`.
+- `config.json` owned by `daemon:daemon` (664)
+- Working directory group `daemon` with group-write (`drwxrwxr-x admin:daemon`) — required for atomic config writes (.tmp, .bak)
+- New files created by the process inherit `daemon` ownership but default `0o644` permissions
 
 ### Deploy workflow
 
@@ -157,3 +166,8 @@ Rust port deployed but **24-hour stability test still pending**. Expected baseli
 - **OOMScoreAdjust:** -500 (OOM killer targets other processes first, but not sshd)
 - **Render FPS:** 60fps sustained
 - **GPIO thread CPU:** ~73% (expected hard real-time PWM overhead)
+
+## CI
+
+GitHub Actions: `cargo build`, `cargo test`, `cargo clippy -- -D warnings` on push/PR to main.
+Workflow: `.github/workflows/ci.yml`
