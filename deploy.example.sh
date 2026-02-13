@@ -33,7 +33,8 @@ ssh ${PI_HOST} "source ~/.cargo/env && cd ${PI_PATH} && cargo build --release --
 
 # Copy config if it doesn't exist on Pi, ensure daemon can write it
 # (hzeller drops privileges from root to daemon after GPIO init)
-ssh ${PI_HOST} "test -f ${PI_PATH}/config.json || cp ${PI_PATH}/config.example.json ${PI_PATH}/config.json; sudo chown daemon:daemon ${PI_PATH}/config.json"
+# daemon needs directory write for atomic config writes (.tmp, .bak files)
+ssh ${PI_HOST} "test -f ${PI_PATH}/config.json || cp ${PI_PATH}/config.example.json ${PI_PATH}/config.json; sudo chown daemon:daemon ${PI_PATH}/config.json && sudo chgrp daemon ${PI_PATH} && sudo chmod g+w ${PI_PATH}"
 
 # Install/update systemd service
 echo "Updating systemd service..."
