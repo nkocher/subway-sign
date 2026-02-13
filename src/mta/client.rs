@@ -375,8 +375,15 @@ async fn fetch_single_feed(
                 Direction::Uptown
             };
 
-            // Headsign: NYCT extension or "Unknown"
-            let destination = "Unknown".to_string();
+            // Destination: find the terminal station (highest stop_sequence)
+            let destination = trip_update
+                .stop_time_update
+                .iter()
+                .max_by_key(|st| st.stop_sequence.unwrap_or(0))
+                .and_then(|st| st.stop_id.as_deref())
+                .and_then(crate::mta::stations::station_name_for_stop_id)
+                .unwrap_or("Unknown")
+                .to_string();
 
             trains.push(Train {
                 route: route_id.to_string(),

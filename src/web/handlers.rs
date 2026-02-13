@@ -99,6 +99,43 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> impl IntoResponse
     }))
 }
 
+/// GET /api/debug/snapshot — dump current train + alert data for verification.
+pub async fn get_debug_snapshot(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let snapshot = state.snapshot.load();
+    let trains: Vec<serde_json::Value> = snapshot
+        .trains
+        .iter()
+        .map(|t| {
+            json!({
+                "route": t.route,
+                "destination": t.destination,
+                "minutes": t.minutes,
+                "direction": format!("{:?}", t.direction),
+                "is_express": t.is_express,
+                "stop_id": t.stop_id,
+            })
+        })
+        .collect();
+    let alerts: Vec<serde_json::Value> = snapshot
+        .alerts
+        .iter()
+        .map(|a| {
+            json!({
+                "text": a.text,
+                "affected_routes": a.affected_routes,
+                "priority": a.priority,
+            })
+        })
+        .collect();
+    Json(json!({
+        "trains": trains,
+        "alerts": alerts,
+        "fetched_at": snapshot.fetched_at,
+        "train_count": trains.len(),
+        "alert_count": alerts.len(),
+    }))
+}
+
 /// GET /api/stations/complete — search/filter complete station database.
 pub async fn get_complete_stations(
     Query(params): Query<StationSearchParams>,
