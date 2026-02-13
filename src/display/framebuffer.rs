@@ -1,5 +1,5 @@
 use super::colors::Rgb;
-use super::fonts::{CharBitmap, RouteIcon, FONT_HEIGHT};
+use super::fonts::{CharBitmap, RouteIcon};
 
 /// Display dimensions.
 pub const DISPLAY_WIDTH: usize = 192;
@@ -36,11 +36,6 @@ impl FrameBuffer {
 
     pub fn height(&self) -> usize {
         self.height
-    }
-
-    /// Clear the entire framebuffer to black.
-    pub fn clear(&mut self) {
-        self.pixels.fill(0);
     }
 
     /// Set a single pixel. Out-of-bounds coordinates are silently ignored.
@@ -134,6 +129,8 @@ impl FrameBuffer {
     }
 
     /// Get the raw pixel buffer for passing to the LED matrix driver.
+    /// Only used in the hardware feature build (via set_image FFI).
+    #[cfg_attr(not(feature = "hardware"), allow(dead_code))]
     pub fn raw_pixels(&self) -> &[u8] {
         &self.pixels
     }
@@ -142,6 +139,7 @@ impl FrameBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::fonts::FONT_HEIGHT;
 
     #[test]
     fn test_new_framebuffer_is_black() {
@@ -171,15 +169,6 @@ mod tests {
         // All pixels should still be black
         assert_eq!(fb.get_pixel(0, 0), (0, 0, 0));
         assert_eq!(fb.get_pixel(9, 9), (0, 0, 0));
-    }
-
-    #[test]
-    fn test_clear() {
-        let mut fb = FrameBuffer::with_size(10, 10);
-        fb.set_pixel(5, 5, (255, 0, 0));
-        assert_ne!(fb.get_pixel(5, 5), (0, 0, 0));
-        fb.clear();
-        assert_eq!(fb.get_pixel(5, 5), (0, 0, 0));
     }
 
     #[test]

@@ -32,11 +32,6 @@ pub fn feed_id_for_route(route: &str) -> Option<&'static str> {
 pub const MTA_FEED_BASE_URL: &str =
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs";
 
-/// Returns the full feed URL for a route.
-pub fn feed_url_for_route(route: &str) -> Option<String> {
-    feed_id_for_route(route).map(|suffix| format!("{}{}", MTA_FEED_BASE_URL, suffix))
-}
-
 /// Returns deduplicated feed URLs needed for a set of routes.
 pub fn feed_urls_for_routes(routes: &[String]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();

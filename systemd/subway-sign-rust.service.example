@@ -3,14 +3,19 @@ Description=NYC MTA Subway Sign (Rust)
 After=network-online.target
 Wants=network-online.target
 
+# Crash-loop protection: stop retrying after 5 failures in 60 seconds.
+# Prevents burning CPU and filling logs on a storage-limited Pi.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/home/YOUR_USERNAME/subway-sign
-ExecStart=/home/YOUR_USERNAME/subway-sign/subway-sign
+WorkingDirectory=/home/admin/subway-sign-rust
+ExecStart=/home/admin/subway-sign-rust/target/release/subway-sign
 Restart=always
-RestartSec=3
-TimeoutStopSec=10
+RestartSec=5
+TimeoutStopSec=15
 StandardOutput=journal
 StandardError=journal
 
@@ -23,6 +28,11 @@ CPUSchedulingPriority=50
 # Python was ~54MB (display) + ~123MB (gunicorn). Rust target: <30MB total.
 MemoryMax=256M
 OOMScoreAdjust=-500
+
+# Hardening — limit blast radius if process is compromised
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
 
 # Log rate limiting
 LogRateLimitIntervalSec=30
