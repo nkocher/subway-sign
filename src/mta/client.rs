@@ -180,6 +180,16 @@ impl MtaClient {
             return self.alerts_cache.clone();
         }
 
+        // Reject non-success responses before parsing
+        if !response.status().is_success() {
+            self.log_error(
+                "alerts",
+                &format!("HTTP {} from alerts API", response.status().as_u16()),
+            );
+            self.record_failure(feed_id);
+            return self.alerts_cache.clone();
+        }
+
         // Store ETag
         if let Some(etag) = response.headers().get("etag") {
             self.alerts_etag = etag.to_str().ok().map(|s| s.to_string());
@@ -316,6 +326,11 @@ async fn fetch_single_feed(
         .send()
         .await
         .map_err(|e| format!("HTTP error: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {} from {}", status.as_u16(), url));
+    }
 
     let bytes = response
         .bytes()
