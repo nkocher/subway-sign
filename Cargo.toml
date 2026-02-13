@@ -1,0 +1,63 @@
+[package]
+name = "subway-sign"
+version = "0.1.0"
+edition = "2021"
+description = "NYC Subway arrival sign for Raspberry Pi LED matrix"
+
+[features]
+default = ["mock"]
+hardware = ["dep:rpi-led-matrix"]
+mock = []
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client (rustls avoids OpenSSL cross-compile issues)
+reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "json"], default-features = false }
+
+# Protobuf (GTFS-RT)
+prost = "0.13"
+prost-types = "0.13"
+
+# Web framework
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "limit", "timeout"] }
+
+# Shared state
+arc-swap = "1"
+tokio-util = "0.7"
+
+# Config file watching
+notify = "7"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Static file embedding
+rust-embed = "8"
+
+# LRU cache (text rendering)
+lru = "0.12"
+
+# Regex (alert text parsing)
+regex = "1"
+
+# LED matrix (Pi only)
+rpi-led-matrix = { version = "0.4", optional = true }
+
+# Utilities
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[build-dependencies]
+prost-build = "0.13"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
