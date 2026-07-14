@@ -18,7 +18,7 @@ reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "json"], default
 
 # Protobuf (GTFS-RT)
 prost = "0.14"
-prost-types = "0.13"
+prost-types = "0.14"
 
 # Web framework
 axum = "0.8"
