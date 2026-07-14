@@ -50,7 +50,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tempfile = "3"
 
 [build-dependencies]
-prost-build = "0.13"
+prost-build = "0.14"
 
 [profile.release]
 opt-level = 3
