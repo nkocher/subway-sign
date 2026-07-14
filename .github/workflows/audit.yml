@@ -16,7 +16,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Checks Cargo.lock against the RustSec advisory DB and files a
       # GitHub issue if a locked dependency has a known vulnerability.
       - uses: rustsec/audit-check@v2
