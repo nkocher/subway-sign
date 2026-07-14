@@ -1,0 +1,14 @@
+[Unit]
+Description=Subway sign weekly self-update (git pull, rebuild, restart)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=admin
+WorkingDirectory=/home/admin/subway-sign-rust
+ExecStart=/bin/bash /home/admin/subway-sign-rust/scripts/pi-self-update.sh
+# Full rebuild on the Pi takes ~5 min; allow slack for dep downloads.
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal

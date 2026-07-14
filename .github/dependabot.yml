@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Rust crates: weekly, with minor+patch bumps grouped into a single PR.
+  # Major bumps arrive as individual PRs and are never auto-merged.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: sunday
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Keep GitHub Actions pinned versions current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

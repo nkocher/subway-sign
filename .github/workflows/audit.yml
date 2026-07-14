@@ -1,0 +1,24 @@
+name: Security audit
+
+on:
+  schedule:
+    - cron: '0 12 * * 1' # Mondays 12:00 UTC
+  push:
+    paths:
+      - Cargo.lock
+      - .github/workflows/audit.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Checks Cargo.lock against the RustSec advisory DB and files a
+      # GitHub issue if a locked dependency has a known vulnerability.
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

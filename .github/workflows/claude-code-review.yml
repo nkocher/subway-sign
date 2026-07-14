@@ -12,6 +12,8 @@ on:
 
 jobs:
   claude-review:
+    # Dependabot PRs don't receive repo secrets, so the review would fail.
+    if: github.actor != 'dependabot[bot]'
     # Optional: Filter by PR author
     # if: |
     #   github.event.pull_request.user.login == 'external-contributor' ||

@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly subway sign self-update
+
+[Timer]
+# Mondays 5:00am — after the 3:00am nightly reboot and before morning use.
+OnCalendar=Mon *-*-* 05:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
