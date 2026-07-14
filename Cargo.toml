@@ -17,7 +17,7 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "json"], default-features = false }
 
 # Protobuf (GTFS-RT)
-prost = "0.13"
+prost = "0.14"
 prost-types = "0.13"
 
 # Web framework
