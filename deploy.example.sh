@@ -24,7 +24,6 @@ rsync -az --delete \
     --exclude .git/ \
     --exclude .worktrees/ \
     --exclude deploy.sh \
-    --exclude .cargo/config.toml \
     ./ "${PI_HOST}:${PI_PATH}/"
 
 # Build on Pi (native compilation)
