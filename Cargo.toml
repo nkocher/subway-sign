@@ -14,7 +14,7 @@ mock = []
 tokio = { version = "1", features = ["full"] }
 
 # HTTP client (rustls avoids OpenSSL cross-compile issues)
-reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "json"], default-features = false }
+reqwest = { version = "0.13", features = ["rustls", "gzip", "json"], default-features = false }
 
 # Protobuf (GTFS-RT)
 prost = "0.14"
