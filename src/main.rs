@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use config::Config;
+use display::framebuffer::FrameBuffer;
 use display::matrix::create_display;
 use display::renderer::Renderer;
 use models::{Alert, DisplaySnapshot};
@@ -419,13 +420,15 @@ impl AlertState {
 /// - spawn_blocking is for short-lived operations, not permanent loops
 fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     let config = state.config.load();
-    let brightness = (config.display.brightness * 100.0).round() as u8;
-    let brightness = brightness.clamp(1, 100);
+    let pct = (config.display.brightness * 100.0).round() as u8;
+    // Hardware only accepts 1-100; 0% is handled by pushing black frames.
+    let brightness = pct.clamp(1, 100);
     let mut display = create_display(brightness);
     let mut renderer = Renderer::new();
     let mut alert_state = AlertState::new();
 
     let mut current_brightness = brightness;
+    let mut display_off = pct == 0;
     let mut cycle_index: usize = 0;
     let mut flash_state = false;
 
@@ -476,15 +479,19 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
             MAX_ALERT_CYCLE_DURATION,
         );
 
-        // Render frame
-        let frame = renderer.render_frame(
-            &snapshot,
-            cycle_index,
-            flash_state,
-            alert_state.scroll_offset,
-            alert_state.show_alert,
-            alert_state.current_alert.as_ref(),
-        );
+        // Render frame (all black when brightness is 0%)
+        let frame = if display_off {
+            FrameBuffer::new()
+        } else {
+            renderer.render_frame(
+                &snapshot,
+                cycle_index,
+                flash_state,
+                alert_state.scroll_offset,
+                alert_state.show_alert,
+                alert_state.current_alert.as_ref(),
+            )
+        };
 
         // Push to display
         display.swap(&frame);
@@ -505,8 +512,13 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
         // Poll for brightness changes every ~1 second (60 frames)
         if frame_count.is_multiple_of(60) {
             let cfg = state.config.load();
-            let new_brightness = (cfg.display.brightness * 100.0).round() as u8;
-            let new_brightness = new_brightness.clamp(1, 100);
+            let new_pct = (cfg.display.brightness * 100.0).round() as u8;
+            let new_display_off = new_pct == 0;
+            if new_display_off != display_off {
+                display_off = new_display_off;
+                info!("[RENDER] Display {}", if display_off { "off" } else { "on" });
+            }
+            let new_brightness = new_pct.clamp(1, 100);
             if new_brightness != current_brightness {
                 display.set_brightness(new_brightness);
                 current_brightness = new_brightness;

@@ -989,13 +989,13 @@
 
         function populateSettings(config) {
             const display = config.display || {};
-            document.getElementById('brightness').value = Math.round((display.brightness || 0.5) * 100);
+            document.getElementById('brightness').value = Math.round((display.brightness ?? 0.5) * 100);
             updateBrightnessLabel();
         }
 
         function updateBrightnessLabel() {
             const value = document.getElementById('brightness').value;
-            document.getElementById('brightnessValue').textContent = value + '%';
+            document.getElementById('brightnessValue').textContent = value === '0' ? 'Off' : value + '%';
         }
 
         async function restartDisplay(autoRestart = false) {
