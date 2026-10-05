@@ -43,6 +43,9 @@ pub struct Renderer {
     /// Regex for MTA symbology tokens in alert text: route bullets like
     /// `[A]`, `[6X]`, `[SIR]` and pictograms like `[airplane icon]`.
     route_pattern: Regex,
+    /// Clock face for one whole second (its text changes once a second, the
+    /// render loop asks 60 times).
+    clock_cache: Option<(i64, FrameBuffer)>,
 }
 
 struct AlertCacheEntry {
@@ -61,6 +64,7 @@ impl Renderer {
         Renderer {
             last_alert_width: 0,
             alert_cache: None,
+            clock_cache: None,
             // Lazy `[A-Z]+?` so a trailing X on a letter route is the express
             // marker (`[FX]` = F express) while `[SIR]` still matches whole.
             route_pattern: Regex::new(r"\[(?:(\d+|[A-Z]+?)([xX])?|([a-z ]+) icon)\]").unwrap(),
@@ -102,15 +106,19 @@ impl Renderer {
     /// Render the clock face the retired MTA LED countdown clocks show:
     /// the date in green on the top row ("Tue, April 23, 2024") and the
     /// time in red on the bottom row ("6:05:39 PM"), both upright and centred.
-    pub fn render_clock<Tz: chrono::TimeZone>(&self, now: &chrono::DateTime<Tz>) -> FrameBuffer
+    pub fn render_clock<Tz: chrono::TimeZone>(&mut self, now: &chrono::DateTime<Tz>) -> FrameBuffer
     where
         Tz::Offset: std::fmt::Display,
     {
-        let mut fb = FrameBuffer::new();
-        let (date, time) = Self::clock_text(now);
-        self.draw_centered(&mut fb, &date, 0, COLOR_GREEN);
-        self.draw_centered(&mut fb, &time, BOTTOM_ROW_Y, COLOR_RED);
-        fb
+        let second = now.timestamp();
+        if self.clock_cache.as_ref().is_none_or(|(s, _)| *s != second) {
+            let mut fb = FrameBuffer::new();
+            let (date, time) = Self::clock_text(now);
+            self.draw_centered(&mut fb, &date, 0, COLOR_GREEN);
+            self.draw_centered(&mut fb, &time, BOTTOM_ROW_Y, COLOR_RED);
+            self.clock_cache = Some((second, fb));
+        }
+        self.clock_cache.as_ref().unwrap().1.clone()
     }
 
     /// The clock face's two lines, formatted as the retired MTA clocks do.
@@ -787,7 +795,7 @@ mod tests {
 
     #[test]
     fn test_clock_face_layout() {
-        let renderer = Renderer::new();
+        let mut renderer = Renderer::new();
         // Longest month and weekday name must still fit the 192px width.
         let fb = renderer.render_clock(&clock_at(2026, 9, 30, 22, 58, 58));
         let lit = |y0: usize, y1: usize, color| {
