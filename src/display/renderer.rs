@@ -40,7 +40,8 @@ pub struct Renderer {
     last_alert_width: i32,
     /// Cached alert rendering: (text, affected_routes_key) → pre-rendered pixels.
     alert_cache: Option<AlertCacheEntry>,
-    /// Regex for matching `[route]` patterns in alert text.
+    /// Regex for MTA symbology tokens in alert text: route bullets like
+    /// `[A]`, `[6X]`, `[SIR]` and pictograms like `[airplane icon]`.
     route_pattern: Regex,
 }
 
@@ -60,7 +61,9 @@ impl Renderer {
         Renderer {
             last_alert_width: 0,
             alert_cache: None,
-            route_pattern: Regex::new(r"\[(\d+|[A-Z]+)([xX])?\]").unwrap(),
+            // Lazy `[A-Z]+?` so a trailing X on a letter route is the express
+            // marker (`[FX]` = F express) while `[SIR]` still matches whole.
+            route_pattern: Regex::new(r"\[(?:(\d+|[A-Z]+?)([xX])?|([a-z ]+) icon)\]").unwrap(),
         }
     }
 
@@ -209,7 +212,8 @@ impl Renderer {
             return buf;
         }
 
-        // Parse into parts: text segments and icon references
+        // Parse into parts: text segments and resolved icons. A token whose
+        // glyph doesn't exist is kept as its text rather than dropped.
         let mut parts: Vec<AlertPart> = Vec::new();
         let mut last_end = 0;
 
@@ -219,10 +223,10 @@ impl Renderer {
                 parts.push(AlertPart::Text(text[last_end..full.start()].to_string()));
             }
 
-            let route = m.get(1).unwrap().as_str().to_string();
-            let has_express_marker = m.get(2).is_some();
-            let is_express = colors::is_express_capable(&route) || has_express_marker;
-            parts.push(AlertPart::Icon { route, is_express });
+            parts.push(match Self::resolve_token(font, &m) {
+                Some(icon) => AlertPart::Icon(icon),
+                None => AlertPart::Text(full.as_str().trim_matches(['[', ']']).to_string()),
+            });
 
             last_end = full.end();
         }
@@ -233,16 +237,13 @@ impl Renderer {
 
         // Measure total width with context-aware spacing
         let rendered: Vec<RenderedPart> = parts
-            .iter()
-            .filter_map(|p| match p {
+            .into_iter()
+            .map(|p| match p {
                 AlertPart::Text(t) => {
-                    let w = font.measure_text(t, CHAR_SPACING, true);
-                    Some(RenderedPart::Text(t.clone(), w))
+                    let w = font.measure_text(&t, CHAR_SPACING, true);
+                    RenderedPart::Text(t, w)
                 }
-                AlertPart::Icon { route, is_express } => {
-                    Self::lookup_icon(font, route, *is_express)
-                        .map(|i| RenderedPart::Icon(route.clone(), *is_express, i.width))
-                }
+                AlertPart::Icon(icon) => RenderedPart::Icon(icon),
             })
             .collect();
 
@@ -269,12 +270,9 @@ impl Renderer {
                     let drawn = buf.draw_text(t, x_pos, 1, alert_color, true, CHAR_SPACING);
                     x_pos += drawn as i32;
                 }
-                RenderedPart::Icon(route, is_express, _w) => {
-                    if let Some(icon) = Self::lookup_icon(font, route, *is_express) {
-                        let y = 1 - icon.baseline_offset;
-                        buf.blit_icon(icon, x_pos, y);
-                        x_pos += icon.width as i32;
-                    }
+                RenderedPart::Icon(icon) => {
+                    buf.blit_icon(icon, x_pos, 1 - icon.baseline_offset);
+                    x_pos += icon.width as i32;
                 }
             }
         }
@@ -294,6 +292,21 @@ impl Renderer {
         if let Some(icon) = Self::lookup_icon(fonts::get_font(), route, is_express) {
             fb.blit_icon(icon, x, y - icon.baseline_offset);
         }
+    }
+
+    /// Resolve one symbology token match to its glyph. A route is express
+    /// only when the token says so (`[6X]`); a plain `[6]` is the local bullet.
+    fn resolve_token(font: &'static MtaFont, m: &regex::Captures) -> Option<&'static fonts::RouteIcon> {
+        match (m.get(1), m.get(3)) {
+            (Some(route), _) => Self::lookup_icon(font, route.as_str(), m.get(2).is_some()),
+            (None, Some(name)) => font.get_icon(&Self::pictogram_key(name.as_str())),
+            (None, None) => None,
+        }
+    }
+
+    /// Font key for a pictogram token: `shuttle bus` -> `ICON_SHUTTLE_BUS`.
+    fn pictogram_key(name: &str) -> String {
+        format!("ICON_{}", name.trim().replace(' ', "_").to_uppercase())
     }
 
     /// Look up a route icon with express fallback to local variant.
@@ -370,14 +383,13 @@ impl Renderer {
 
 enum AlertPart {
     Text(String),
-    Icon { route: String, is_express: bool },
+    Icon(&'static fonts::RouteIcon),
 }
 
 enum RenderedPart {
     /// (text, measured width)
     Text(String, usize),
-    /// (route, is_express, icon width)
-    Icon(String, bool, usize),
+    Icon(&'static fonts::RouteIcon),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -398,7 +410,7 @@ impl RenderedPart {
     fn width(&self) -> usize {
         match self {
             RenderedPart::Text(_, w) => *w,
-            RenderedPart::Icon(_, _, w) => *w,
+            RenderedPart::Icon(icon) => icon.width,
         }
     }
 }
@@ -643,5 +655,80 @@ mod tests {
         f.write_all(&pixels).unwrap();
         println!("Rendered frame written to {path}");
         println!("Open with: open {path}");
+    }
+
+    /// The glyph a single token resolves to, if any.
+    fn resolve(token: &str) -> Option<&'static fonts::RouteIcon> {
+        let renderer = Renderer::new();
+        let caps = renderer.route_pattern.captures(token).expect("token should match");
+        Renderer::resolve_token(fonts::get_font(), &caps)
+    }
+
+    fn icon(name: &str) -> &'static fonts::RouteIcon {
+        fonts::get_font().get_icon(name).unwrap_or_else(|| panic!("{} not loaded", name))
+    }
+
+    #[test]
+    fn test_tokens_resolve_to_the_right_glyph() {
+        let cases = [
+            ("[airplane icon]", "ICON_AIRPLANE"),
+            ("[shuttle bus icon]", "ICON_SHUTTLE_BUS"),
+            ("[accessibility icon]", "ICON_ACCESSIBILITY"),
+            ("[SIR]", "ROUTE_SIR_CIRCLE"),
+            ("[H]", "ROUTE_H_CIRCLE"),
+            ("[FX]", "ROUTE_F_DIAMOND"),
+            ("[6X]", "ROUTE_6_DIAMOND"),
+            // Plain bullets are local, even on express-capable lines.
+            ("[A]", "ROUTE_A_CIRCLE"),
+            ("[6]", "ROUTE_6_CIRCLE"),
+        ];
+        for (token, name) in cases {
+            let got = resolve(token).unwrap_or_else(|| panic!("{} did not resolve", token));
+            assert!(std::ptr::eq(got, icon(name)), "{} should draw {}", token, name);
+        }
+    }
+
+    #[test]
+    fn test_unknown_token_renders_as_text() {
+        assert!(resolve("[ZZ]").is_none());
+        assert!(resolve("[mystery icon]").is_none());
+
+        let renderer = Renderer::new();
+        let font = fonts::get_font();
+        let buf = renderer.render_alert_with_icons("[ZZ]");
+        assert_eq!(buf.width(), font.measure_text("ZZ", CHAR_SPACING, true));
+    }
+
+    #[test]
+    fn test_express_diamonds_load() {
+        // The diamonds are 15 rows; they were once declared 13 and silently skipped.
+        let diamond = fonts::get_font().get_route_icon("A", true).unwrap();
+        assert_eq!(diamond.pixels.len(), 15);
+        assert!(!std::ptr::eq(diamond, icon("ROUTE_A_CIRCLE")));
+    }
+
+    #[test]
+    fn test_real_alert_headers_fully_drawable() {
+        // Subway alert headers from the live MTA feed (2026-10-04). Every token
+        // must resolve to a glyph and every character must have one.
+        let renderer = Renderer::new();
+        let font = fonts::get_font();
+        let mut problems = Vec::new();
+        for header in include_str!("../../tests/fixtures/alert_headers.txt").lines() {
+            let text = crate::mta::client::clean_alert_text(header);
+            for caps in renderer.route_pattern.captures_iter(&text) {
+                if Renderer::resolve_token(font, &caps).is_none() {
+                    problems.push(format!("token {}", &caps[0]));
+                }
+            }
+            for ch in renderer.route_pattern.replace_all(&text, "").chars() {
+                if ch != ' ' && font.get_char_bitmap(ch, false).is_none() {
+                    problems.push(format!("char {:?}", ch));
+                }
+            }
+        }
+        problems.sort();
+        problems.dedup();
+        assert!(problems.is_empty(), "undrawable: {:?}", problems);
     }
 }

@@ -1,0 +1,133 @@
+All [SIR] trains from Arthur Kill to Prince's Bay board from the Tottenville-bound platform
+All [SIR] trains from Huguenot to Eltingville board from the Tottenville-bound platform
+All [SIR] trains from Prince's Bay to Arthur Kill board from the St George-bound platform
+All [SIR] trains from Stapleton to Grasmere board from the St George-bound platform
+Downtown [4][6] trains are running with delays after an NYPD investigation at 51 St concluded.
+Enter 5 Av/53 St [E][F] Station at 5 Av only Madison Av entrance will be exit only
+Fallen leaves may slow [SIR] service
+In Brooklyn and Lower Manhattan, Astoria-bound [N] local runs via the [Q] from DeKalb Av to Canal St
+In Brooklyn and Lower Manhattan, no Inwood-bound [A] at High St, Fulton St, Chambers St, Canal St and Spring St
+In Brooklyn and Manhattan, [C] service is rerouted between Jay St-MetroTech and 59 St-Columbus Circle
+In Brooklyn and Manhattan, [C] service is rerouted in both directions between Jay St-MetroTech and 59 St-Columbus Circle
+In Brooklyn, Coney Island-bound [F] and Church Av-bound [G] skip 4 Av-9 St, 15 St-Prospect Park and Fort Hamilton Pkwy
+In Brooklyn, Coney Island-bound [F] runs express from Jay St-MetroTech to Kings Hwy All trains at 18 Av and Kings Hwy board from the Manhattan-bound platform
+In Brooklyn, Euclid Av-bound [C] skips Lafayette Av, Clinton-Washington Avs, Franklin Av and Kingston-Throop Avs
+In Brooklyn, Jamaica Center-bound [J] skips Kosciuszko St, Gates Av, Halsey St and Chauncey St
+In Brooklyn, Manhattan-bound [2][3] skips Eastern Pkwy-Brooklyn Museum, Grand Army Plaza and Bergen St
+In Brooklyn, Manhattan-bound [4] local skips Eastern Pkwy-Brooklyn Museum, Grand Army Plaza and Bergen St
+In Brooklyn, Manhattan-bound [A] local skips Shepherd Av, Van Siclen Av, Liberty Av, Rockaway Av and Ralph Av
+In Brooklyn, Manhattan-bound [D] local skips 25 St, Prospect Av, 4 Av-9 St and Union St
+In Brooklyn, Manhattan-bound [F] skips Avenue P, Avenue N, Bay Pkwy and Avenue I All trains at 18 Av board from the Coney Island-bound platform
+In Brooklyn, Manhattan-bound [J] skips Chauncey St, Halsey St, Gates Av and Kosciuszko St
+In Brooklyn, Manhattan-bound [N] local skips 25 St, Prospect Av, 4 Av-9 St and Union St
+In Brooklyn, Manhattan-bound [N] runs via the [D] from Coney Island-Stillwell Av to 36 St
+In Brooklyn, Manhattan-bound [Q] skips Avenue M, Avenue J, Avenue H, Cortelyou Rd, Beverley Rd and Parkside Av
+In Brooklyn, Manhattan-bound [Q] skips W 8 St-NY Aquarium - take the [F] instead
+In Brooklyn, Manhattan-bound [R] skips 25 St, Prospect Av, 4 Av-9 St and Union St
+In Brooklyn, Queens-bound [A] local skips Lafayette Av, Clinton-Washington Avs, Franklin Av and Kingston-Throop Avs
+In Brooklyn, Queens-bound [A] local skips Ralph Av, Rockaway Av, Liberty Av, Van Siclen Av and Shepherd Av
+In Brooklyn, [G] skips 4 Av-9 St, 15 St-Prospect Park and Fort Hamilton Pkwy in both directions - take the [F] instead
+In Brooklyn, [L] runs every 16 minutes between Canarsie-Rockaway Pkwy and Broadway Junction
+In Brooklyn, no [B] between Kings Hwy and Brighton Beach - take the [Q]
+In Brooklyn, no [D] at Coney Island-Stillwell Av
+In Brooklyn, no [G] between Hoyt-Schermerhorn Sts and Church Av Trains run every 20 minutes between Bedford-Nostrand Avs and Hoyt-Schermerhorn Sts
+In Brooklyn, no [L] between Myrtle-Wyckoff Avs and Atlantic Av
+In Brooklyn, no [N] at Coney Island-Stillwell Av
+In Brooklyn, no [Q] between Brighton Beach and Coney Island-Stillwell Av
+In Brooklyn, no [Q] between Prospect Park and Coney Island-Stillwell Av
+In Lower Manhattan and Brooklyn, Coney Island-bound [N] local runs via the [Q] from Canal St to DeKalb Av
+In Manhattan and Brooklyn, Euclid Av-bound [C] runs via the [D] from 59 St-Columbus Circle to 34 St-Herald Sq and via the [F] to Jay St-MetroTech
+In Manhattan, [4] runs local in both directions between 125 St and Brooklyn Bridge-City Hall
+In Manhattan, [4] runs local in both directions between 125 St and Grand Central-42 St
+In Manhattan, all [L] trains at 1 Av and 3 Av board from the Brooklyn-bound platform
+In Manhattan, all [L] trains at 3 Av and 1 Av board from the 8 Av-bound platform
+In Manhattan, downtown [1] and [2] local skip Christopher St-Stonewall, Houston St, Canal St and Franklin St
+In Manhattan, downtown [4] local and [6] skip 116 St, 110 St, 103 St, 96 St, 77 St, 68 St and 51 St
+In Manhattan, downtown [A] local skips 116 St, 110 St, 103 St, 96 St, 86 St, 81 St and 72 St
+In Manhattan, downtown [A] local skips 50 St, 23 St and Spring St
+In Manhattan, downtown [A] runs local from 125 St to Canal St
+In Manhattan, downtown [C] skips 116 St, 110 St, 103 St, 96 St, 86 St, 81 St and 72 St
+In Manhattan, downtown [D] runs local from 125 St to 59 St-Columbus Circle
+In Manhattan, downtown [E] skips 23 St and Spring St
+In Manhattan, no [L] between 14 St-Union Sq and 8 Av
+In Manhattan, uptown [1] skips 50 St, 59 St-Columbus Circle, 66 St-Lincoln Center, 79 St and 86 St
+In Manhattan, uptown [2] local skips 50 St, 59 St-Columbus Circle, 66 St-Lincoln Center, 79 St and 86 St
+In Manhattan, uptown [2] local skips 79 St and 86 St - Take the [1] instead
+In Manhattan, uptown [A] local skips 72 St, 81 St, 86 St, 96 St, 103 St, 110 St and 116 St
+In Manhattan, uptown [A] local skips 72 St, 81 St-Museum of Natural History, 86 St, 96 St, 103 St, Cathedral Pkwy-110 St and 116 St
+In Manhattan, uptown [A] stops at 23 St and 50 St
+In Manhattan, uptown [C] skips 72 St, 81 St-Museum of Natural History, 86 St, 96 St, 103 St, Cathedral Pkwy-110 St and 116 St
+In Queens, Flushing-bound [7] skips 52 St and 69 St All trains at Woodside-61 St board from the Manhattan-bound platform
+In Queens, Flushing-bound [7] skips 82 St, 90 St, 103 St and 111 St All trains at Junction Blvd board from the Manhattan-bound platform
+In Queens, Forest Hills-bound [R] skips 36 St, Steinway St, 46 St, Northern Blvd and 65 St
+In Queens, Jamaica Center-bound [E] stops at 75 Av and Briarwood
+In Queens, Jamaica-bound [E][F] local skips 36 St, Steinway St, 46 St, Northern Blvd and 65 St
+In Queens, Jamaica-bound [F] skips 75 Av, Briarwood and Sutphin Blvd
+In Queens, Manhattan-bound [E] skips Briarwood
+In Queens, Manhattan-bound [E] stops at Briarwood and 75 Av
+In Queens, Manhattan-bound [F] skips Sutphin Blvd and Briarwood
+In Queens, Manhattan-bound [F] skips Sutphin Blvd, Briarwood and 75 Av
+In Queens, all Manhattan-bound [7][7X] local/express trains stop at 74 St-Broadway
+In Queens, all [7] trains at Hunters Point Av and Vernon Blvd-Jackson Av board from the Flushing-bound platform
+In Queens, all [7] trains at Vernon Blvd-Jackson Av and Hunters Point Av board from the Manhattan-bound platform
+In Queens, no [7] at Flushing-Main St
+In Southeast Queens, [A] replaces the [H] Rockaway Park Shuttle
+In Upper Manhattan, downtown [1] skips 125 St, 116 St-Columbia University, Cathedral Pkwy (110 St) and 103 St
+In Upper Manhattan, downtown [A] local skips 163 St-Amsterdam Av, 155 St and 135 St
+In Upper Manhattan, downtown [D] stops at 135 St
+In Upper Manhattan, no [1] between 137 St-City College and 168 St-Washington Hts
+In the Bronx, Manhattan-bound [2] skips Jackson Av All trains at 3 Av/149 St board from the uptown platform
+In the Bronx, Manhattan-bound [2][5] runs express from E 180 St to 3 Av-149 St All trains at E 180 St board from the uptown platform
+In the Bronx, Manhattan-bound [6] skips Longwood Av, E 149 St, E 143 St, Cypress Av and Brook Av All trains board from the uptown platform at 3 Av-138 St
+In the Bronx, Manhattan-bound express [6X] runs local from Parkchester to 3 Av-138 St
+In the Bronx, Pelham Bay Park-bound [6] skips Castle Hill Av, Zerega Av, Westchester Sq-E Tremont Av, Middletown Rd and Buhre Av
+In the Bronx, Pelham Bay Park-bound express [6X] runs local from 3 Av-138 St to Parkchester
+In the Bronx, Woodlawn-bound [4] skips 161 St, 167 St, 170 St, Mt Eden Av and 176 St All trains board from the Manhattan-bound platform at Burnside Av
+In the Bronx, Woodlawn-bound [4] skips 170 St, Mt Eden Av and 176 St and runs every 16 minutes (days/evenings)
+In the Bronx, Woodlawn-bound [4] skips Burnside Av
+In the Bronx, [2] runs every 16 minutes between Gun Hill Rd and Wakefield-241 St The last stop for alternate trains from Manhattan is Gun Hill Rd
+In the Bronx, [4] runs every 16 minutes between 167 St and Woodlawn The last stop for alternate trains from Manhattan is 167 St
+In the Bronx, [6] runs every 8 minutes between 3 Av/138 St and Pelham Bay Park The last stop for some trains from Manhattan is 3 Av/138 St
+In the Bronx, all [2] trains at 3 Av-149 St board from the Manhattan-bound platform
+In the Bronx, all [2] trains at E 180 St board from the uptown platform
+In the Bronx, no [1] at Van Cortlandt Park-242 St
+In the Bronx, no [2] at Wakefield-241 St
+In the Bronx, no [4] service between 161 St-Yankee Stadium and Woodlawn
+In the Bronx, no overnight [5] between Dyre Av and E 180 St
+In the Bronx, uptown [2][5] skips Jackson Av, Prospect Av, Intervale Av, Simpson St, Freeman St, 174 St and West Farms Sq-E Tremont Av
+Jamaica Center-bound [E] runs via the Roosevelt Island [F] from W 4 St-Wash Sq, Manhattan to 21 St-Queensbridge
+Jamaica Center-bound [E] runs via the Roosevelt Island [F] from W 4 St-Wash Sq, Manhattan to 21 St-Queensbridge, Queens, resuming service at 36 St
+No Brooklyn-bound [F] service at 21 St-Queensbridge, Roosevelt Island, Lexington Av/63 St and 57 St
+No Jamaica-bound [F] service at 57 St, Lexington Av/63 St, Roosevelt Island, and 21 St-Queensbridge
+No [2] between Chambers St, Manhattan and Atlantic Av-Barclays Ctr, Brooklyn
+No [4] between 149 St-Hostos and 125 St
+No [5] between Bowling Green, Manhattan and E 180 St, Bronx
+No [5] between E 180 St, Bronx and Bowling Green, Manhattan
+No [6] between Hunts Point Av and 125 St
+No [7] between Queensboro Plaza, Queens and 34 St-Hudson Yards, Manhattan
+No [A] between Broad Channel and Far Rockaway [A] will be rerouted to Rockaway Park replacing [H] Take [shuttle bus icon] free shuttle buses and/or rerouted [A] via [H]
+No [G] between Bedford-Nostrand Avs and Court Sq
+No [J] between Myrtle Av and Broad St
+No [L] between Broadway Junction and Canarsie-Rockaway Pkwy
+No [L] between Lorimer St, Brooklyn and 8 Av, Manhattan
+No [M] between Myrtle Av (Broadway) and Delancey St-Essex St
+No [W] between 57 St-7 Av, Manhattan and Astoria-Ditmars Blvd, Queens - take the [N] instead
+No downtown [E] at 7 Av, 50 St, 42 St-Port Authority, 34 St-Penn Station, 23 St and 14 St No [E] at Spring St, Canal St and World Trade Center
+No late night [R] between Whitehall St-South Ferry and 59 St, Brooklyn
+Overnight [3] is suspended
+Queens-bound [A] trains are running with delays after we moved a train that had its brakes activated at Euclid Av.
+The main entrance/exit and atrium stairway at 74 St-Broadway-Roosevelt Av [E][F][R][7] Station (between Broadway and Roosevelt Av) will be temporarily closed
+[2] runs approximately every 15 minutes
+[2] runs every 30 minutes In Upper Manhattan, all trains at 110 St-Malcolm X Plaza, 116 St, 125 St and 135 St board from the downtown platform
+[2] runs every 30 minutes In Upper Manhattan, all trains at 135 St, 125 St, 116 St and 110 St-Malcolm X Plaza board from the uptown platform
+[5] runs every 20 minutes and local in both directions between 125 St and Grand Central-42 St
+[5] service ends early between Bowling Green, Manhattan and E 180 St, Bronx
+[6] runs every 8 minutes
+[F] trains are running with delays in both directions while we perform planned track maintenance in Brooklyn.
+[J] express trains make local stops in both directions at Hewes St, Lorimer St and Flushing Av
+[J] trains run every 10 minutes
+[M] is extended to the 96 St [Q] station
+[SIR] New Dorp Station - St George-bound - east end entrance is closed until further notice
+[SIR] runs on an adjusted schedule
+[S] 42 Street Shuttle service runs overnight
+[airplane icon] JFK AirTrain service is suspended and replaced by free shuttle buses
