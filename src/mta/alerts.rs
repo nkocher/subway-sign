@@ -51,14 +51,16 @@ impl AlertManager {
         }
     }
 
-    /// Filter alerts by priority and apply cooldown.
-    pub fn filter_and_sort(&mut self, alerts: &[Alert]) -> Vec<Alert> {
+    /// Keep alerts in effect at `now` (POSIX seconds) and off cooldown,
+    /// sorted by priority.
+    pub fn filter_and_sort(&mut self, alerts: &[Alert], now: u64) -> Vec<Alert> {
         self.cleanup_cooldowns();
 
-        // Filter by cooldown
+        // Filter by active period and cooldown (before the queue-size cap,
+        // so future planned work can't crowd out alerts in effect now)
         let mut non_cooled: Vec<Alert> = alerts
             .iter()
-            .filter(|a| !self.is_on_cooldown(a))
+            .filter(|a| a.is_active_at(now) && !self.is_on_cooldown(a))
             .cloned()
             .collect();
 
@@ -182,6 +184,7 @@ mod tests {
             affected_routes: HashSet::from(["1".to_string()]),
             priority,
             alert_id: id.to_string(),
+            active_periods: Vec::new(),
         }
     }
 
@@ -193,6 +196,38 @@ mod tests {
     }
 
     #[test]
+    fn test_active_period_window() {
+        let mut alert = make_alert("a", "Planned work", 1);
+        assert!(alert.is_active_at(500), "no periods means always active");
+
+        alert.active_periods = vec![(Some(1000), Some(2000))];
+        assert!(!alert.is_active_at(999), "not yet started");
+        assert!(alert.is_active_at(1000));
+        assert!(!alert.is_active_at(2000), "end is exclusive");
+
+        alert.active_periods = vec![(Some(1000), Some(2000)), (Some(3000), None)];
+        assert!(alert.is_active_at(9_999_999), "open-ended second period");
+        assert!(!alert.is_active_at(2500), "between periods");
+    }
+
+    #[test]
+    fn test_future_alerts_do_not_crowd_out_active_ones() {
+        let mut mgr = AlertManager::new();
+        // More future planned-work alerts than the queue holds, all higher priority.
+        let mut alerts: Vec<Alert> = (0..MAX_QUEUE_SIZE + 2)
+            .map(|i| Alert {
+                active_periods: vec![(Some(10_000), None)],
+                ..make_alert(&format!("future{}", i), &format!("Weekend work {}", i), 1)
+            })
+            .collect();
+        alerts.push(make_alert("now", "Delays right now", 5));
+
+        let filtered = mgr.filter_and_sort(&alerts, 5_000);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].alert_id, "now");
+    }
+
+    #[test]
     fn test_filter_and_sort() {
         let mut mgr = AlertManager::new();
         let alerts = vec![
@@ -201,7 +236,7 @@ mod tests {
             make_alert("a3", "Medium priority", 3),
         ];
 
-        let filtered = mgr.filter_and_sort(&alerts);
+        let filtered = mgr.filter_and_sort(&alerts, 0);
         assert_eq!(filtered.len(), 3);
         assert_eq!(filtered[0].priority, 1); // sorted by priority
         assert_eq!(filtered[1].priority, 3);
@@ -216,7 +251,7 @@ mod tests {
             make_alert("a2", "Second", 2),
         ];
 
-        mgr.filter_and_sort(&alerts);
+        mgr.filter_and_sort(&alerts, 0);
 
         let next = mgr.get_next_alert().unwrap();
         assert_eq!(next.alert_id, "a1");
@@ -229,7 +264,7 @@ mod tests {
             make_alert("a1", "First", 1),
             make_alert("a2", "Second", 2),
         ];
-        mgr.filter_and_sort(&alerts);
+        mgr.filter_and_sort(&alerts, 0);
 
         // Show first alert
         let alert = mgr.get_next_alert().unwrap().clone();
@@ -247,7 +282,7 @@ mod tests {
             make_alert("a1", "First", 1),
             make_alert("a2", "Second", 2),
         ];
-        mgr.filter_and_sort(&alerts);
+        mgr.filter_and_sort(&alerts, 0);
         assert!(!mgr.all_shown_this_cycle());
 
         let a1 = mgr.get_next_alert().unwrap().clone();
@@ -263,7 +298,7 @@ mod tests {
     fn test_reset_cycle() {
         let mut mgr = AlertManager::new();
         let alerts = vec![make_alert("a1", "First", 1)];
-        mgr.filter_and_sort(&alerts);
+        mgr.filter_and_sort(&alerts, 0);
 
         let a1 = mgr.get_next_alert().unwrap().clone();
         mgr.mark_displayed(&a1);
@@ -288,7 +323,7 @@ mod tests {
         let alerts: Vec<Alert> = (0..20)
             .map(|i| make_alert(&format!("a{}", i), &format!("Alert {}", i), i))
             .collect();
-        mgr.filter_and_sort(&alerts);
+        mgr.filter_and_sort(&alerts, 0);
         assert_eq!(mgr.queue_len(), MAX_QUEUE_SIZE);
     }
 }

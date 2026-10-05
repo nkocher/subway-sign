@@ -42,6 +42,20 @@ pub struct Alert {
     pub affected_routes: HashSet<String>,
     pub priority: i32,
     pub alert_id: String,
+    /// GTFS-RT `active_period`s as (start, end) POSIX seconds; a missing
+    /// bound is open. Empty means always active.
+    pub active_periods: Vec<(Option<u64>, Option<u64>)>,
+}
+
+impl Alert {
+    /// Whether the alert is in effect at `now` (POSIX seconds). The MTA feed
+    /// carries planned work weeks ahead; only alerts in effect should show.
+    pub fn is_active_at(&self, now: u64) -> bool {
+        self.active_periods.is_empty()
+            || self.active_periods.iter().any(|&(start, end)| {
+                start.is_none_or(|s| s <= now) && end.is_none_or(|e| now < e)
+            })
+    }
 }
 
 /// Complete immutable snapshot of all data needed to render a frame.

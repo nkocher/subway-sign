@@ -233,7 +233,7 @@ async fn fetch_task(state: Arc<AppState>) {
                     let raw_alerts = client.fetch_alerts(&routes).await;
                     let mut am = state.alert_manager.lock()
                         .unwrap_or_else(|e| e.into_inner());
-                    cached_alerts = am.filter_and_sort(&raw_alerts);
+                    cached_alerts = am.filter_and_sort(&raw_alerts, unix_now_secs());
                 }
             }
             _ = train_interval.tick() => {
@@ -647,7 +647,7 @@ mod tests {
 
     fn make_state(alerts: Vec<Alert>) -> Arc<AppState> {
         let mut am = mta::alerts::AlertManager::new();
-        am.filter_and_sort(&alerts);
+        am.filter_and_sort(&alerts, 0);
         Arc::new(AppState {
             config: ArcSwap::from_pointee(test_config()),
             snapshot: ArcSwap::from_pointee(DisplaySnapshot::empty()),
@@ -678,6 +678,7 @@ mod tests {
             affected_routes: HashSet::from(["1".to_string()]),
             priority: 1,
             alert_id: id.to_string(),
+            active_periods: Vec::new(),
         }
     }
 
@@ -693,8 +694,8 @@ mod tests {
         }
     }
 
-    /// Replay the render loop frame by frame at 60fps over `seconds` of
-    /// simulated time, with `trains_at(t)` supplying the snapshot's trains.
+    /// Replay the render loop frame by frame over `seconds` of simulated time
+    /// (15fps at 4px/frame: the real 60px/s scroll at a quarter of the frames), with `trains_at(t)` supplying the snapshot's trains.
     ///
     /// Returns every interruption: a frame where an alert that was still
     /// mid-scroll left the bottom row (replaced, restarted, or cleared).
@@ -707,12 +708,13 @@ mod tests {
         let mut renderer = display::renderer::Renderer::new();
         let mut alert_state = AlertState::new();
         let t0 = Instant::now();
-        let speed = 1.0_f32;
+        const FPS: f64 = 15.0;
+        let speed = 4.0_f32;
         let mut prev: Option<(String, f32, i32)> = None;
         let mut interruptions = Vec::new();
 
-        for frame in 0..(seconds * 60.0) as u64 {
-            let t = frame as f64 / 60.0;
+        for frame in 0..(seconds * FPS) as u64 {
+            let t = frame as f64 / FPS;
             let snapshot = DisplaySnapshot {
                 trains: trains_at(t),
                 alerts: alerts.clone(),
