@@ -358,12 +358,23 @@ impl AlertState {
                 self.scroll_offset = 0.0;
                 self.triggered_by = Some((first_train.route.clone(), first_train.destination.clone()));
                 self.cycle_start_time = Instant::now();
+                info!(
+                    "[ALERT] start id={} trigger={}/{} queued={}",
+                    alert.alert_id, first_train.route, first_train.destination, am.queue_len()
+                );
             }
         }
 
         // Process active alert display
         if self.show_alert && self.current_alert.is_some() {
             if self.cycle_start_time.elapsed() > max_duration {
+                info!(
+                    "[ALERT] cut off by cycle cap id={} scrolled={:.0}/{} first_train_min={}",
+                    self.current_alert.as_ref().map_or("", |a| a.alert_id.as_str()),
+                    self.scroll_offset,
+                    renderer.get_scroll_complete_distance(),
+                    first_train.minutes
+                );
                 self.clear();
                 am.periodic_cleanup();
                 return;
@@ -394,6 +405,10 @@ impl AlertState {
             };
 
             if let Some(alert) = next {
+                info!(
+                    "[ALERT] next id={} restart={} first_train_min={}",
+                    alert.alert_id, triggering_train_departed, first_train.minutes
+                );
                 self.current_alert = Some(alert);
                 self.scroll_offset = 0.0;
                 if triggering_train_departed {
@@ -404,6 +419,11 @@ impl AlertState {
                     self.cycle_start_time = Instant::now();
                 }
             } else {
+                info!(
+                    "[ALERT] cycle end reason={} first_train_min={}",
+                    if triggering_train_departed { "train departed" } else { "all shown" },
+                    first_train.minutes
+                );
                 self.clear();
             }
         }

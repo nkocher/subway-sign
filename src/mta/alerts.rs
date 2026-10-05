@@ -132,8 +132,7 @@ impl AlertManager {
     }
 
     /// Number of alerts currently in queue.
-    #[cfg(test)]
-    pub(crate) fn queue_size(&self) -> usize {
+    pub fn queue_len(&self) -> usize {
         self.queue.len()
     }
 
@@ -279,7 +278,7 @@ mod tests {
         let mgr = AlertManager::new();
         assert!(mgr.get_next_alert().is_none());
         assert!(mgr.all_shown_this_cycle());
-        assert_eq!(mgr.queue_size(), 0);
+        assert_eq!(mgr.queue_len(), 0);
         assert!(!mgr.has_alerts());
     }
 
@@ -290,6 +289,6 @@ mod tests {
             .map(|i| make_alert(&format!("a{}", i), &format!("Alert {}", i), i))
             .collect();
         mgr.filter_and_sort(&alerts);
-        assert_eq!(mgr.queue_size(), MAX_QUEUE_SIZE);
+        assert_eq!(mgr.queue_len(), MAX_QUEUE_SIZE);
     }
 }
