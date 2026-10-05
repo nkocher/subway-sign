@@ -36,6 +36,13 @@ pub struct AppState {
 }
 
 /// Current time as seconds since the Unix epoch.
+fn unix_now_f64() -> f64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
 pub fn unix_now_secs() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -467,6 +474,10 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     let mut cycle_index: usize = 0;
     let mut flash_state = false;
 
+    let mut live_source = state.snapshot.load_full();
+    let mut live_snapshot = Arc::new(live_source.at(unix_now_f64()));
+    let mut last_retime = Instant::now();
+
     let mut last_cycle_time = Instant::now();
     let mut last_flash_time = Instant::now();
     let mut frame_count: u64 = 0;
@@ -479,6 +490,7 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     const FRAME_TIME: std::time::Duration =
         std::time::Duration::from_nanos((1_000_000_000.0 / TARGET_FPS) as u64);
     const CYCLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+    const RETIME_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
     const FLASH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
     const SCROLL_PX_PER_SEC: f32 = 60.0;
     const SCROLL_SPEED: f32 = SCROLL_PX_PER_SEC / TARGET_FPS as f32;
@@ -490,8 +502,15 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     while running.load(Ordering::Relaxed) {
         let frame_start = Instant::now();
 
-        // Load latest snapshot (lock-free)
-        let snapshot = state.snapshot.load();
+        // Load latest snapshot (lock-free), re-timed once a second so the
+        // countdowns move between 20s fetches
+        let fetched = state.snapshot.load_full();
+        if !Arc::ptr_eq(&fetched, &live_source) || last_retime.elapsed() >= RETIME_INTERVAL {
+            live_snapshot = Arc::new(fetched.at(unix_now_f64()));
+            live_source = fetched;
+            last_retime = Instant::now();
+        }
+        let snapshot = Arc::clone(&live_snapshot);
 
         // Update cycle index
         if last_cycle_time.elapsed() >= CYCLE_INTERVAL {
