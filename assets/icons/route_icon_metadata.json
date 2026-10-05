@@ -36,7 +36,7 @@
     "color": "#00ff00"
   },
   "ROUTE_6_DIAMOND": {
-    "width": 14,
+    "width": 15,
     "height": 15,
     "baseline_offset": 0,
     "color": "#00ff00"
@@ -48,19 +48,19 @@
     "color": "#b933ad"
   },
   "ROUTE_4_DIAMOND": {
-    "width": 14,
+    "width": 15,
     "height": 15,
     "baseline_offset": 0,
     "color": "#00ff00"
   },
   "ROUTE_5_DIAMOND": {
-    "width": 14,
+    "width": 15,
     "height": 15,
     "baseline_offset": 0,
     "color": "#00ff00"
   },
   "ROUTE_7_DIAMOND": {
-    "width": 14,
+    "width": 15,
     "height": 15,
     "baseline_offset": 0,
     "color": "#b933ad"
@@ -72,7 +72,7 @@
     "color": "#0039a6"
   },
   "ROUTE_A_DIAMOND": {
-    "width": 14,
+    "width": 15,
     "height": 15,
     "baseline_offset": 0,
     "color": "#0039a6"
@@ -96,7 +96,7 @@
     "color": "#ff6319"
   },
   "ROUTE_D_DIAMOND": {
-    "width": 14,
+    "width": 15,
     "height": 15,
     "baseline_offset": 0,
     "color": "#ff6319"
@@ -108,7 +108,7 @@
     "color": "#0039a6"
   },
   "ROUTE_E_DIAMOND": {
-    "width": 14,
+    "width": 15,
     "height": 15,
     "baseline_offset": 0,
     "color": "#0039a6"
@@ -180,13 +180,13 @@
     "color": "#996633"
   },
   "ROUTE_2_DIAMOND": {
-    "width": 14,
+    "width": 15,
     "height": 15,
     "baseline_offset": 0,
     "color": "#ee352e"
   },
   "ROUTE_3_DIAMOND": {
-    "width": 14,
+    "width": 15,
     "height": 15,
     "baseline_offset": 0,
     "color": "#ee352e"
@@ -204,7 +204,7 @@
     "color": "#0039a6"
   },
   "ROUTE_F_DIAMOND": {
-    "width": 14,
+    "width": 15,
     "height": 15,
     "baseline_offset": 0,
     "color": "#ff6319"

@@ -440,7 +440,7 @@ mod tests {
         assert!(font.get_route_icon("1", true).is_some());
         // Route 4 has DIAMOND → should return it
         let diamond = font.get_route_icon("4", true).unwrap();
-        assert_eq!(diamond.width, 14);
+        assert_eq!(diamond.width, 15);
     }
 
     #[test]

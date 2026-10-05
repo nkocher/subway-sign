@@ -733,9 +733,11 @@ mod tests {
 
     #[test]
     fn test_express_diamonds_load() {
-        // The diamonds are 15 rows; they were once declared 13 and silently skipped.
+        // The diamonds are 15x15; they were once declared 14x13, so the loader
+        // skipped them and, once loaded, would have cut off the west point.
         let diamond = fonts::get_font().get_route_icon("A", true).unwrap();
         assert_eq!(diamond.pixels.len(), 15);
+        assert_eq!(diamond.width, 15, "a diamond with single-pixel tips is 15 wide");
         assert!(!std::ptr::eq(diamond, icon("ROUTE_A_CIRCLE")));
     }
 
