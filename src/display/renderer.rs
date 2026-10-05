@@ -99,6 +99,38 @@ impl Renderer {
         fb
     }
 
+    /// Render the clock face the retired MTA LED countdown clocks show:
+    /// the date in green on the top row ("Tue, April 23, 2024") and the
+    /// time in red on the bottom row ("6:05:39 PM"), both upright and centred.
+    pub fn render_clock<Tz: chrono::TimeZone>(&self, now: &chrono::DateTime<Tz>) -> FrameBuffer
+    where
+        Tz::Offset: std::fmt::Display,
+    {
+        let mut fb = FrameBuffer::new();
+        let (date, time) = Self::clock_text(now);
+        self.draw_centered(&mut fb, &date, 0, COLOR_GREEN);
+        self.draw_centered(&mut fb, &time, BOTTOM_ROW_Y, COLOR_RED);
+        fb
+    }
+
+    /// The clock face's two lines, formatted as the retired MTA clocks do.
+    fn clock_text<Tz: chrono::TimeZone>(now: &chrono::DateTime<Tz>) -> (String, String)
+    where
+        Tz::Offset: std::fmt::Display,
+    {
+        (
+            now.format("%a, %B %-d, %Y").to_string(),
+            now.format("%-I:%M:%S %p").to_string(),
+        )
+    }
+
+    /// Draw upright text horizontally centred in a train row.
+    fn draw_centered(&self, fb: &mut FrameBuffer, text: &str, row_y: i32, color: colors::Rgb) {
+        let width = fonts::get_font().measure_text(text, CHAR_SPACING, false) as i32;
+        let x = (DISPLAY_WIDTH as i32 - width) / 2;
+        fb.draw_text(text, x, row_y + TOP_ROW_Y_ADJUST + 4, color, false, CHAR_SPACING);
+    }
+
     /// Render a single train row at the given y_offset.
     fn render_train_row(
         &self,
@@ -730,5 +762,43 @@ mod tests {
         problems.sort();
         problems.dedup();
         assert!(problems.is_empty(), "undrawable: {:?}", problems);
+    }
+
+    fn clock_at(y: i32, mo: u32, d: u32, h: u32, mi: u32, sec: u32) -> chrono::DateTime<chrono::FixedOffset> {
+        use chrono::TimeZone;
+        chrono::FixedOffset::west_opt(7 * 3600)
+            .unwrap()
+            .with_ymd_and_hms(y, mo, d, h, mi, sec)
+            .unwrap()
+    }
+
+    #[test]
+    fn test_clock_text_matches_mta_format() {
+        // As photographed on a retired countdown clock at Spring St.
+        let (date, time) = Renderer::clock_text(&clock_at(2024, 4, 23, 18, 5, 39));
+        assert_eq!(date, "Tue, April 23, 2024");
+        assert_eq!(time, "6:05:39 PM");
+
+        let (_, morning) = Renderer::clock_text(&clock_at(2024, 4, 23, 0, 7, 3));
+        assert_eq!(morning, "12:07:03 AM");
+    }
+
+    #[test]
+    fn test_clock_face_layout() {
+        let renderer = Renderer::new();
+        // Longest month and weekday name must still fit the 192px width.
+        let fb = renderer.render_clock(&clock_at(2026, 9, 30, 22, 58, 58));
+        let lit = |y0: usize, y1: usize, color| {
+            let xs: Vec<usize> = (0..fb.width())
+                .filter(|&x| (y0..y1).any(|y| fb.get_pixel(x, y) == color))
+                .collect();
+            (*xs.first().unwrap(), *xs.last().unwrap())
+        };
+        let (dl, dr) = lit(0, 16, COLOR_GREEN);
+        let (tl, tr) = lit(16, 32, COLOR_RED);
+        assert!(dl > 0 && dr < fb.width() - 1, "date fits: {}..{}", dl, dr);
+        // Centred to within a pixel or two of glyph padding.
+        assert!((dl as i32 - (fb.width() - 1 - dr) as i32).abs() <= 3, "date centred: {}..{}", dl, dr);
+        assert!((tl as i32 - (fb.width() - 1 - tr) as i32).abs() <= 3, "time centred: {}..{}", tl, tr);
     }
 }
