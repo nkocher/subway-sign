@@ -9,6 +9,7 @@ pub const DISPLAY_HEIGHT: usize = 32;
 ///
 /// Stores pixels as a flat `Vec<u8>` in row-major order (R, G, B per pixel).
 /// Total size: 192 * 32 * 3 = 18,432 bytes.
+#[derive(Clone)]
 pub struct FrameBuffer {
     pixels: Vec<u8>,
     width: usize,
