@@ -215,7 +215,9 @@ impl MtaClient {
         };
 
         let mut alert_objects = Vec::new();
-        let mut seen_texts: HashSet<String> = HashSet::new();
+        // Same text across entities (e.g. one alert per affected stop) is shown
+        // once, active whenever any of its copies is.
+        let mut index_by_text: HashMap<String, usize> = HashMap::new();
 
         for entity in &feed.entity {
             let Some(ref alert_proto) = entity.alert else {
@@ -251,13 +253,27 @@ impl MtaClient {
                         .collect::<Vec<_>>()
                         .join(" ");
 
-                    if !seen_texts.contains(&clean_text) {
-                        seen_texts.insert(clean_text.clone());
+                    let periods: Vec<(Option<u64>, Option<u64>)> = alert_proto
+                        .active_period
+                        .iter()
+                        .map(|p| (p.start, p.end))
+                        .collect();
+
+                    if let Some(&i) = index_by_text.get(&clean_text) {
+                        let existing: &mut Alert = &mut alert_objects[i];
+                        if periods.is_empty() {
+                            existing.active_periods.clear();
+                        } else if !existing.active_periods.is_empty() {
+                            existing.active_periods.extend(periods);
+                        }
+                    } else {
+                        index_by_text.insert(clean_text.clone(), alert_objects.len());
                         alert_objects.push(Alert {
                             text: clean_text,
                             affected_routes: relevant.clone(),
                             priority,
                             alert_id: entity.id.clone(),
+                            active_periods: periods,
                         });
                     }
                 }

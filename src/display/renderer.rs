@@ -543,6 +543,7 @@ mod tests {
             affected_routes: routes,
             priority: 1,
             alert_id: "test".into(),
+            active_periods: Vec::new(),
         };
 
         let snapshot = DisplaySnapshot {
@@ -569,6 +570,7 @@ mod tests {
             affected_routes: routes,
             priority: 1,
             alert_id: "test".into(),
+            active_periods: Vec::new(),
         };
 
         let snapshot = DisplaySnapshot {
