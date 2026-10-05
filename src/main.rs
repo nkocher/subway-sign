@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -33,6 +33,39 @@ pub struct AppState {
     pub config_changed: tokio::sync::Notify,
     pub last_fetch_success: AtomicU64,
     pub last_render_tick: AtomicU64,
+    /// Debug preview forced onto the display (`/api/debug/preview`).
+    pub preview: ArcSwapOption<Preview>,
+}
+
+/// What a debug preview shows until `until`: the clock face, or one alert
+/// looping on the bottom row under the live top row.
+pub struct Preview {
+    pub clock: bool,
+    pub alert: Option<Alert>,
+    pub until: Instant,
+}
+
+/// Longest an alert cycle may run before handing the bottom row back to the
+/// train list. Checked only between alerts; a started alert always finishes.
+const MAX_ALERT_CYCLE_DURATION: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Clock face hours: from 22:00 until 06:00 the sign is a clock.
+const CLOCK_NIGHT_START_HOUR: u32 = 22;
+const CLOCK_NIGHT_END_HOUR: u32 = 6;
+/// During the day the clock shows for the first CLOCK_SHOW_MINUTES of every
+/// CLOCK_PERIOD_MINUTES.
+const CLOCK_PERIOD_MINUTES: i64 = 7;
+const CLOCK_SHOW_MINUTES: i64 = 2;
+
+/// Whether the clock face is due at local time `now`.
+fn clock_due(now: &chrono::DateTime<chrono::Local>) -> bool {
+    use chrono::Timelike;
+    let hour = now.hour();
+    let night = !(CLOCK_NIGHT_END_HOUR..CLOCK_NIGHT_START_HOUR).contains(&hour);
+    // Counted on the epoch rather than the hour (60 isn't a multiple of 7),
+    // so the spacing is always exactly CLOCK_PERIOD_MINUTES.
+    let minute = now.timestamp().div_euclid(60);
+    night || minute.rem_euclid(CLOCK_PERIOD_MINUTES) < CLOCK_SHOW_MINUTES
 }
 
 /// Current time as seconds since the Unix epoch.
@@ -93,6 +126,7 @@ async fn main() {
         config_changed: tokio::sync::Notify::new(),
         last_fetch_success: AtomicU64::new(0),
         last_render_tick: AtomicU64::new(0),
+        preview: ArcSwapOption::empty(),
     });
 
     // Spawn fetch task
@@ -340,8 +374,8 @@ impl AlertState {
         snapshot: &DisplaySnapshot,
         renderer: &mut Renderer,
         scroll_speed: f32,
-        max_duration: std::time::Duration,
         now: Instant,
+        allow_new_cycles: bool,
     ) {
         let first_train = snapshot.get_first_train();
         let train_at_zero = first_train.minutes == 0;
@@ -371,7 +405,12 @@ impl AlertState {
             .unwrap_or_else(|e| e.into_inner());
 
         // Start showing alerts when a train arrives and alerts are queued
-        if train_at_zero && !self.show_alert && self.capped_train.is_none() && am.has_alerts() {
+        if train_at_zero
+            && !self.show_alert
+            && allow_new_cycles
+            && self.capped_train.is_none()
+            && am.has_alerts()
+        {
             am.reset_cycle();
             if let Some(alert) = am.get_next_alert() {
                 self.current_alert = Some(alert.clone());
@@ -403,8 +442,8 @@ impl AlertState {
 
             // Decide what to show next. The cycle cap is only checked here,
             // between alerts: an alert that has started always finishes.
-            let capped = now.duration_since(self.cycle_start_time) > max_duration;
-            let next = if capped {
+            let capped = now.duration_since(self.cycle_start_time) > MAX_ALERT_CYCLE_DURATION;
+            let next = if capped || !allow_new_cycles {
                 None
             } else if triggering_train_departed && train_at_zero && am.has_alerts() {
                 // Train departed but another arrived -- restart the cycle
@@ -431,7 +470,9 @@ impl AlertState {
                     self.cycle_start_time = now;
                 }
             } else {
-                let reason = if capped {
+                let reason = if !allow_new_cycles {
+                    "clock due"
+                } else if capped {
                     "cycle cap"
                 } else if triggering_train_departed {
                     "train departed"
@@ -478,6 +519,9 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     let mut live_snapshot = Arc::new(live_source.at(unix_now_f64()));
     let mut last_retime = Instant::now();
 
+    let mut preview_seen: Option<Arc<Preview>> = None;
+    let mut preview_scroll: f32 = 0.0;
+
     let mut last_cycle_time = Instant::now();
     let mut last_flash_time = Instant::now();
     let mut frame_count: u64 = 0;
@@ -494,7 +538,6 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     const FLASH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
     const SCROLL_PX_PER_SEC: f32 = 60.0;
     const SCROLL_SPEED: f32 = SCROLL_PX_PER_SEC / TARGET_FPS as f32;
-    const MAX_ALERT_CYCLE_DURATION: std::time::Duration = std::time::Duration::from_secs(90);
     const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
 
     info!("[RENDER] Render loop started ({}fps)", TARGET_FPS as u32);
@@ -524,19 +567,51 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
             flash_state = !flash_state;
         }
 
-        // Alert state machine
-        alert_state.update(
-            &state,
-            &snapshot,
-            &mut renderer,
-            SCROLL_SPEED,
-            MAX_ALERT_CYCLE_DURATION,
-            frame_start,
-        );
+        // A debug preview overrides the schedule until it expires
+        let preview = state.preview.load_full().filter(|p| frame_start < p.until);
+        let local_now = chrono::Local::now();
+        let clock_is_due = clock_due(&local_now);
+
+        // Alert state machine. While the clock is due, an alert already
+        // scrolling finishes, but no new alert cycle starts.
+        if preview.is_none() {
+            alert_state.update(
+                &state,
+                &snapshot,
+                &mut renderer,
+                SCROLL_SPEED,
+                frame_start,
+                !clock_is_due,
+            );
+        }
 
         // Render frame (all black when brightness is 0%)
         let frame = if display_off {
             FrameBuffer::new()
+        } else if let Some(p) = &preview {
+            if !preview_seen.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, p)) {
+                preview_seen = Some(Arc::clone(p));
+                preview_scroll = 0.0;
+            }
+            match &p.alert {
+                Some(alert) if !p.clock => {
+                    preview_scroll += SCROLL_SPEED;
+                    if preview_scroll >= renderer.get_scroll_complete_distance() as f32 {
+                        preview_scroll = 0.0;
+                    }
+                    renderer.render_frame(
+                        &snapshot,
+                        cycle_index,
+                        flash_state,
+                        preview_scroll,
+                        true,
+                        Some(alert),
+                    )
+                }
+                _ => renderer.render_clock(&local_now),
+            }
+        } else if clock_is_due && !alert_state.show_alert {
+            renderer.render_clock(&local_now)
         } else {
             renderer.render_frame(
                 &snapshot,
@@ -676,6 +751,7 @@ mod tests {
             config_changed: tokio::sync::Notify::new(),
             last_fetch_success: AtomicU64::new(0),
             last_render_tick: AtomicU64::new(0),
+            preview: ArcSwapOption::empty(),
         })
     }
 
@@ -740,7 +816,7 @@ mod tests {
                 fetched_at: 0.0,
             };
             let now = t0 + Duration::from_secs_f64(t);
-            alert_state.update(&state, &snapshot, &mut renderer, speed, Duration::from_secs(90), now);
+            alert_state.update(&state, &snapshot, &mut renderer, speed, now, true);
             renderer.render_frame(
                 &snapshot,
                 0,
@@ -820,7 +896,7 @@ mod tests {
 
         assert!(!alert.show_alert);
 
-        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90), Instant::now());
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Instant::now(), true);
 
         assert!(alert.show_alert, "alert should trigger when train at 0 min");
         assert!(alert.current_alert.is_some());
@@ -838,7 +914,7 @@ mod tests {
         let mut renderer = display::renderer::Renderer::new();
         let mut alert = AlertState::new();
 
-        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90), Instant::now());
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Instant::now(), true);
 
         assert!(!alert.show_alert, "alert should not trigger when no train at 0 min");
     }
@@ -855,7 +931,7 @@ mod tests {
         let mut alert = AlertState::new();
 
         // Trigger alert
-        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90), Instant::now());
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Instant::now(), true);
         assert!(alert.show_alert);
 
         // Simulate scroll completing by setting offset past the threshold
@@ -863,7 +939,7 @@ mod tests {
         alert.scroll_offset = complete_dist + 1.0;
 
         // Update should mark as displayed and clear (only one alert)
-        alert.update(&state, &snapshot, &mut renderer, 0.0, Duration::from_secs(90), Instant::now());
+        alert.update(&state, &snapshot, &mut renderer, 0.0, Instant::now(), true);
 
         assert!(!alert.show_alert, "alert should clear after all shown this cycle");
     }
@@ -876,26 +952,25 @@ mod tests {
             alerts: vec![],
             fetched_at: 0.0,
         };
-        let cap = Duration::from_secs(90);
         let mut renderer = display::renderer::Renderer::new();
         let mut alert = AlertState::new();
         let t0 = Instant::now();
 
-        alert.update(&state, &snapshot, &mut renderer, 1.0, cap, t0);
+        alert.update(&state, &snapshot, &mut renderer, 1.0, t0, true);
         assert!(alert.show_alert);
 
         // Past the cap but mid-scroll: the alert keeps going.
         let late = t0 + Duration::from_secs(100);
-        alert.update(&state, &snapshot, &mut renderer, 1.0, cap, late);
+        alert.update(&state, &snapshot, &mut renderer, 1.0, late, true);
         assert!(alert.show_alert, "an alert that has started must finish");
 
         // It finishes: the cycle ends instead of starting a2.
         alert.scroll_offset = renderer.get_scroll_complete_distance() as f32;
-        alert.update(&state, &snapshot, &mut renderer, 1.0, cap, late);
+        alert.update(&state, &snapshot, &mut renderer, 1.0, late, true);
         assert!(!alert.show_alert, "cycle should end at the cap, between alerts");
 
         // The same train still at 0 min must not immediately restart a cycle.
-        alert.update(&state, &snapshot, &mut renderer, 1.0, cap, late);
+        alert.update(&state, &snapshot, &mut renderer, 1.0, late, true);
         assert!(!alert.show_alert, "capped train must not re-trigger");
 
         // A different arriving train may.
@@ -903,7 +978,7 @@ mod tests {
             trains: vec![make_train("2", "Wakefield", 0)],
             ..snapshot.clone()
         };
-        alert.update(&state, &other, &mut renderer, 1.0, cap, late);
+        alert.update(&state, &other, &mut renderer, 1.0, late, true);
         assert!(alert.show_alert, "a new arrival should start a cycle");
         assert_eq!(alert.current_alert.as_ref().unwrap().alert_id, "a2");
     }
@@ -921,8 +996,56 @@ mod tests {
             alerts: alerts.clone(),
             fetched_at: 0.0,
         };
-        alert.update(&state, &snapshot_arrive, &mut renderer, 1.0, Duration::from_secs(90), Instant::now());
+        alert.update(&state, &snapshot_arrive, &mut renderer, 1.0, Instant::now(), true);
         assert!(alert.show_alert);
         assert_eq!(alert.triggered_by.as_ref().unwrap(), &("1".to_string(), "Uptown".to_string()));
+    }
+
+    fn local_at(h: u32, m: u32) -> chrono::DateTime<chrono::Local> {
+        use chrono::TimeZone;
+        chrono::Local.with_ymd_and_hms(2026, 10, 5, h, m, 0).unwrap()
+    }
+
+    #[test]
+    fn test_clock_due_all_night() {
+        for (h, m) in [(22, 0), (23, 59), (0, 0), (3, 0), (5, 59)] {
+            assert!(clock_due(&local_at(h, m)), "{:02}:{:02} should be clock", h, m);
+        }
+    }
+
+    #[test]
+    fn test_clock_due_two_of_every_seven_minutes_by_day() {
+        for start in [(6, 0), (9, 31), (12, 0), (21, 53)] {
+            let due: Vec<bool> = (0..7)
+                .map(|i| clock_due(&(local_at(start.0, start.1) + chrono::Duration::minutes(i))))
+                .collect();
+            assert_eq!(due.iter().filter(|&&d| d).count(), 2, "from {:?}: {:?}", start, due);
+        }
+    }
+
+    #[test]
+    fn test_clock_due_holds_new_alert_cycles() {
+        let state = make_state(vec![make_alert("a1"), make_alert("a2")]);
+        let snapshot = DisplaySnapshot {
+            trains: vec![make_train("1", "Uptown", 0)],
+            alerts: vec![],
+            fetched_at: 0.0,
+        };
+        let mut renderer = display::renderer::Renderer::new();
+        let mut alert = AlertState::new();
+        let t0 = Instant::now();
+
+        // Clock due: an arriving train does not start alerts.
+        alert.update(&state, &snapshot, &mut renderer, 1.0, t0, false);
+        assert!(!alert.show_alert);
+
+        // An alert already scrolling finishes, then the cycle ends for the clock.
+        alert.update(&state, &snapshot, &mut renderer, 1.0, t0, true);
+        assert!(alert.show_alert);
+        alert.update(&state, &snapshot, &mut renderer, 1.0, t0, false);
+        assert!(alert.show_alert, "a started alert is never cut off");
+        alert.scroll_offset = renderer.get_scroll_complete_distance() as f32;
+        alert.update(&state, &snapshot, &mut renderer, 1.0, t0, false);
+        assert!(!alert.show_alert, "no next alert while the clock is due");
     }
 }

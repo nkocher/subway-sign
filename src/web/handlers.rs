@@ -339,3 +339,58 @@ fn determine_station_name(config: &Config) -> String {
             }
         })
 }
+
+/// Longest a debug preview may hold the display.
+const PREVIEW_MAX_SECONDS: u64 = 600;
+/// Longest alert text a debug preview accepts.
+const PREVIEW_MAX_CHARS: usize = 500;
+
+#[derive(Deserialize)]
+pub struct PreviewRequest {
+    alert: Option<String>,
+    #[serde(default)]
+    clock: bool,
+    seconds: Option<u64>,
+}
+
+/// POST /api/debug/preview — force the clock face, or loop one alert text on
+/// the bottom row, for up to 10 minutes. In memory only; a restart clears it.
+pub async fn start_preview(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<PreviewRequest>,
+) -> impl IntoResponse {
+    let alert_text = req.alert.map(|t| crate::mta::client::clean_alert_text(&t));
+    if !req.clock && alert_text.as_deref().is_none_or(str::is_empty) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "message": "give \"alert\" text or \"clock\": true"})),
+        );
+    }
+    if alert_text.as_ref().is_some_and(|t| t.chars().count() > PREVIEW_MAX_CHARS) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "message": format!("alert text over {} characters", PREVIEW_MAX_CHARS)})),
+        );
+    }
+
+    let seconds = req.seconds.unwrap_or(120).clamp(1, PREVIEW_MAX_SECONDS);
+    info!("[WEB] Debug preview for {}s: clock={} alert={:?}", seconds, req.clock, alert_text);
+    state.preview.store(Some(Arc::new(crate::Preview {
+        clock: req.clock,
+        alert: alert_text.map(|text| crate::models::Alert {
+            text,
+            affected_routes: Default::default(),
+            priority: 0,
+            alert_id: "debug-preview".to_string(),
+            active_periods: Vec::new(),
+        }),
+        until: std::time::Instant::now() + std::time::Duration::from_secs(seconds),
+    })));
+    (StatusCode::OK, Json(json!({"success": true, "seconds": seconds})))
+}
+
+/// DELETE /api/debug/preview — end a debug preview early.
+pub async fn stop_preview(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    state.preview.store(None);
+    Json(json!({"success": true}))
+}
