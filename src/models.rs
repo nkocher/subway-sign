@@ -35,6 +35,11 @@ impl Train {
     }
 }
 
+/// Whole minutes from `now` until `arrival` (both POSIX seconds), rounded down.
+pub fn minutes_until(arrival: f64, now: f64) -> i32 {
+    ((arrival - now) / 60.0).max(0.0) as i32
+}
+
 /// A service alert message.
 #[derive(Debug, Clone)]
 pub struct Alert {
@@ -76,6 +81,32 @@ impl DisplaySnapshot {
             trains: Vec::new(),
             alerts: Vec::new(),
             fetched_at: 0.0,
+        }
+    }
+
+    /// The snapshot as of `now` (POSIX seconds), with minutes recomputed from
+    /// each train's arrival time so countdowns keep moving between fetches.
+    ///
+    /// Trains past their predicted arrival are kept (at 0 min) rather than
+    /// dropped: a late train's prediction slips forward on the next fetch, and
+    /// dropping it here would make it vanish and reappear. The fetch drops
+    /// trains that have really arrived. Trains without an arrival timestamp
+    /// (placeholders) are left unchanged.
+    pub fn at(&self, now: f64) -> DisplaySnapshot {
+        let trains = self
+            .trains
+            .iter()
+            .map(|t| {
+                let mut t = t.clone();
+                if t.arrival_timestamp > 0.0 {
+                    t.minutes = minutes_until(t.arrival_timestamp, now);
+                }
+                t
+            })
+            .collect();
+        DisplaySnapshot {
+            trains,
+            ..self.clone()
         }
     }
 
@@ -143,6 +174,37 @@ pub fn stop_ids_to_station_stops(stop_ids: &[String]) -> Vec<StationStop> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn train_arriving_at(arrival: f64) -> Train {
+        Train {
+            arrival_timestamp: arrival,
+            minutes: 7, // stale value from an earlier fetch
+            ..Train::empty()
+        }
+    }
+
+    #[test]
+    fn test_minutes_until_rounds_down() {
+        assert_eq!(minutes_until(1_000.0 + 59.0, 1_000.0), 0);
+        assert_eq!(minutes_until(1_000.0 + 60.0, 1_000.0), 1);
+        assert_eq!(minutes_until(1_000.0 + 179.9, 1_000.0), 2);
+        assert_eq!(minutes_until(900.0, 1_000.0), 0, "past arrival clamps to 0");
+    }
+
+    #[test]
+    fn test_snapshot_at_retimes_countdowns() {
+        let snap = DisplaySnapshot {
+            trains: vec![train_arriving_at(1_000.0 + 125.0), Train::empty()],
+            ..DisplaySnapshot::empty()
+        };
+        let live = snap.at(1_000.0);
+        assert_eq!(live.trains[0].minutes, 2);
+        assert_eq!(live.trains[1].minutes, 999, "placeholder keeps its sentinel");
+
+        let later = snap.at(1_000.0 + 130.0);
+        assert_eq!(later.trains.len(), 2, "a train past its prediction is kept");
+        assert_eq!(later.trains[0].minutes, 0);
+    }
 
     #[test]
     fn test_display_snapshot_empty() {

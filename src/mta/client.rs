@@ -143,6 +143,18 @@ impl MtaClient {
         // Cleanup stale cache entries
         self.cleanup_feed_cache();
 
+        // Cached trains carry minutes from their original fetch: recompute
+        // them, and drop trains that have arrived since, so a feed outage
+        // can't freeze a countdown (or hold a train at "0min").
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        all_trains.retain(|t| t.arrival_timestamp > now);
+        for train in &mut all_trains {
+            train.minutes = crate::models::minutes_until(train.arrival_timestamp, now);
+        }
+
         // Sort and deduplicate
         all_trains.sort_by(|a, b| {
             a.arrival_timestamp
@@ -394,7 +406,7 @@ async fn fetch_single_feed(
                 continue; // Already passed
             }
 
-            let mins = ((arrival_ts - now_secs) / 60.0).max(0.0) as i32;
+            let mins = crate::models::minutes_until(arrival_ts, now_secs);
 
             // Direction from stop_id suffix
             let direction = if stop_id.ends_with('S') {
