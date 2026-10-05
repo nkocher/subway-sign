@@ -19,10 +19,14 @@ echo "=== Deploying NYC Subway Sign (Rust) ==="
 
 # Sync source code to Pi
 echo "Syncing source to Pi..."
+# config.json* is the Pi's live config (brightness, routes) -- never overwrite
+# it from the dev machine. .git without a slash also matches a worktree's
+# .git file.
 rsync -az --delete \
     --exclude target/ \
-    --exclude .git/ \
+    --exclude .git \
     --exclude .worktrees/ \
+    --exclude 'config.json*' \
     --exclude deploy.sh \
     ./ "${PI_HOST}:${PI_PATH}/"
 
