@@ -296,6 +296,10 @@ struct AlertState {
     scroll_offset: f32,
     triggered_by: Option<(String, String)>,
     cycle_start_time: Instant,
+    /// Train whose alert cycle ended at the cycle cap. It must not start a
+    /// new cycle while it is still sitting at 0 min, or the cap would never
+    /// hand the bottom row back to the train list.
+    capped_train: Option<(String, String)>,
 }
 
 impl AlertState {
@@ -306,6 +310,7 @@ impl AlertState {
             scroll_offset: 0.0,
             triggered_by: None,
             cycle_start_time: Instant::now(),
+            capped_train: None,
         }
     }
 
@@ -329,9 +334,18 @@ impl AlertState {
         renderer: &mut Renderer,
         scroll_speed: f32,
         max_duration: std::time::Duration,
+        now: Instant,
     ) {
         let first_train = snapshot.get_first_train();
         let train_at_zero = first_train.minutes == 0;
+
+        let still_capped = train_at_zero
+            && self.capped_train.as_ref().is_some_and(|(route, dest)| {
+                *route == first_train.route && *dest == first_train.destination
+            });
+        if !still_capped {
+            self.capped_train = None;
+        }
 
         // Skip mutex entirely when no alerts are active and none could trigger
         if !train_at_zero && !self.show_alert {
@@ -350,14 +364,14 @@ impl AlertState {
             .unwrap_or_else(|e| e.into_inner());
 
         // Start showing alerts when a train arrives and alerts are queued
-        if train_at_zero && !self.show_alert && am.has_alerts() {
+        if train_at_zero && !self.show_alert && self.capped_train.is_none() && am.has_alerts() {
             am.reset_cycle();
             if let Some(alert) = am.get_next_alert() {
                 self.current_alert = Some(alert.clone());
                 self.show_alert = true;
                 self.scroll_offset = 0.0;
                 self.triggered_by = Some((first_train.route.clone(), first_train.destination.clone()));
-                self.cycle_start_time = Instant::now();
+                self.cycle_start_time = now;
                 info!(
                     "[ALERT] start id={} trigger={}/{} queued={}",
                     alert.alert_id, first_train.route, first_train.destination, am.queue_len()
@@ -367,19 +381,6 @@ impl AlertState {
 
         // Process active alert display
         if self.show_alert && self.current_alert.is_some() {
-            if self.cycle_start_time.elapsed() > max_duration {
-                info!(
-                    "[ALERT] cut off by cycle cap id={} scrolled={:.0}/{} first_train_min={}",
-                    self.current_alert.as_ref().map_or("", |a| a.alert_id.as_str()),
-                    self.scroll_offset,
-                    renderer.get_scroll_complete_distance(),
-                    first_train.minutes
-                );
-                self.clear();
-                am.periodic_cleanup();
-                return;
-            }
-
             self.scroll_offset += scroll_speed;
 
             let scroll_complete = self.scroll_offset >= renderer.get_scroll_complete_distance() as f32;
@@ -393,8 +394,12 @@ impl AlertState {
                 am.mark_displayed(alert);
             }
 
-            // Decide what to show next
-            let next = if triggering_train_departed && train_at_zero && am.has_alerts() {
+            // Decide what to show next. The cycle cap is only checked here,
+            // between alerts: an alert that has started always finishes.
+            let capped = now.duration_since(self.cycle_start_time) > max_duration;
+            let next = if capped {
+                None
+            } else if triggering_train_departed && train_at_zero && am.has_alerts() {
                 // Train departed but another arrived -- restart the cycle
                 am.reset_cycle();
                 am.get_next_alert().cloned()
@@ -416,14 +421,24 @@ impl AlertState {
                         first_train.route.clone(),
                         first_train.destination.clone(),
                     ));
-                    self.cycle_start_time = Instant::now();
+                    self.cycle_start_time = now;
                 }
             } else {
+                let reason = if capped {
+                    "cycle cap"
+                } else if triggering_train_departed {
+                    "train departed"
+                } else {
+                    "all shown"
+                };
                 info!(
                     "[ALERT] cycle end reason={} first_train_min={}",
-                    if triggering_train_departed { "train departed" } else { "all shown" },
-                    first_train.minutes
+                    reason, first_train.minutes
                 );
+                if capped && train_at_zero {
+                    self.capped_train =
+                        Some((first_train.route.clone(), first_train.destination.clone()));
+                }
                 self.clear();
             }
         }
@@ -497,6 +512,7 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
             &mut renderer,
             SCROLL_SPEED,
             MAX_ALERT_CYCLE_DURATION,
+            frame_start,
         );
 
         // Render frame (all black when brightness is 0%)
@@ -665,6 +681,111 @@ mod tests {
         }
     }
 
+    /// An alert long enough (~150 chars) that a few of them exceed the cycle cap.
+    fn make_long_alert(id: &str) -> Alert {
+        Alert {
+            text: format!(
+                "Alert {} - trains are running with delays while crews respond to a \
+                 signal problem near the station, expect longer waits and crowding",
+                id
+            ),
+            ..make_alert(id)
+        }
+    }
+
+    /// Replay the render loop frame by frame at 60fps over `seconds` of
+    /// simulated time, with `trains_at(t)` supplying the snapshot's trains.
+    ///
+    /// Returns every interruption: a frame where an alert that was still
+    /// mid-scroll left the bottom row (replaced, restarted, or cleared).
+    fn replay_interruptions(
+        alerts: Vec<Alert>,
+        seconds: f64,
+        trains_at: impl Fn(f64) -> Vec<Train>,
+    ) -> Vec<String> {
+        let state = make_state(alerts.clone());
+        let mut renderer = display::renderer::Renderer::new();
+        let mut alert_state = AlertState::new();
+        let t0 = Instant::now();
+        let speed = 1.0_f32;
+        let mut prev: Option<(String, f32, i32)> = None;
+        let mut interruptions = Vec::new();
+
+        for frame in 0..(seconds * 60.0) as u64 {
+            let t = frame as f64 / 60.0;
+            let snapshot = DisplaySnapshot {
+                trains: trains_at(t),
+                alerts: alerts.clone(),
+                fetched_at: 0.0,
+            };
+            let now = t0 + Duration::from_secs_f64(t);
+            alert_state.update(&state, &snapshot, &mut renderer, speed, Duration::from_secs(90), now);
+            renderer.render_frame(
+                &snapshot,
+                0,
+                false,
+                alert_state.scroll_offset,
+                alert_state.show_alert,
+                alert_state.current_alert.as_ref(),
+            );
+
+            let cur = alert_state
+                .current_alert
+                .as_ref()
+                .filter(|_| alert_state.show_alert)
+                .map(|a| (a.alert_id.clone(), alert_state.scroll_offset));
+
+            if let Some((ref id, offset, dist)) = prev {
+                let continued = matches!(&cur, Some((cid, coff)) if cid == id && *coff > offset);
+                let finished = offset + speed >= dist as f32;
+                if !continued && !finished {
+                    interruptions.push(format!(
+                        "t={:.1}s: alert {} left at {:.0}/{}px, then {:?}",
+                        t, id, offset, dist, cur.as_ref().map(|c| &c.0)
+                    ));
+                }
+            }
+            prev = cur.map(|(id, off)| (id, off, renderer.get_scroll_complete_distance()));
+        }
+        interruptions
+    }
+
+    #[test]
+    fn replay_train_dwelling_at_zero() {
+        // A train holding in the station at "0min" for 150s while six long
+        // alerts are queued -- longer than the 90s cycle cap.
+        let alerts: Vec<Alert> = (1..=6).map(|i| make_long_alert(&format!("a{}", i))).collect();
+        let cut = replay_interruptions(alerts, 240.0, |t| {
+            vec![make_train("1", "Uptown", if t < 150.0 { 0 } else { 4 })]
+        });
+        assert!(cut.is_empty(), "alerts cut mid-scroll:\n{}", cut.join("\n"));
+    }
+
+    #[test]
+    fn replay_train_departs_mid_cycle() {
+        // Train at 0 for 40s, gone, then a different train arrives at 60s.
+        let alerts: Vec<Alert> = (1..=6).map(|i| make_long_alert(&format!("a{}", i))).collect();
+        let cut = replay_interruptions(alerts, 240.0, |t| match t {
+            t if t < 40.0 => vec![make_train("1", "Uptown", 0)],
+            t if t < 60.0 => vec![make_train("2", "Wakefield", 2)],
+            t if t < 100.0 => vec![make_train("2", "Wakefield", 0)],
+            _ => vec![make_train("3", "Harlem", 5)],
+        });
+        assert!(cut.is_empty(), "alerts cut mid-scroll:\n{}", cut.join("\n"));
+    }
+
+    #[test]
+    fn replay_back_to_back_arrivals() {
+        // Busy station: a different train hits 0 every 30s for 4 minutes.
+        let alerts: Vec<Alert> = (1..=6).map(|i| make_long_alert(&format!("a{}", i))).collect();
+        let routes = [("1", "Uptown"), ("2", "Wakefield"), ("3", "Harlem"), ("7", "Flushing")];
+        let cut = replay_interruptions(alerts, 300.0, |t| {
+            let (r, d) = routes[(t / 30.0) as usize % routes.len()];
+            if t < 240.0 { vec![make_train(r, d, 0)] } else { vec![make_train(r, d, 6)] }
+        });
+        assert!(cut.is_empty(), "alerts cut mid-scroll:\n{}", cut.join("\n"));
+    }
+
     #[test]
     fn test_alert_triggers_on_arrival() {
         let state = make_state(vec![make_alert("a1")]);
@@ -678,7 +799,7 @@ mod tests {
 
         assert!(!alert.show_alert);
 
-        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90));
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90), Instant::now());
 
         assert!(alert.show_alert, "alert should trigger when train at 0 min");
         assert!(alert.current_alert.is_some());
@@ -696,7 +817,7 @@ mod tests {
         let mut renderer = display::renderer::Renderer::new();
         let mut alert = AlertState::new();
 
-        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90));
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90), Instant::now());
 
         assert!(!alert.show_alert, "alert should not trigger when no train at 0 min");
     }
@@ -713,7 +834,7 @@ mod tests {
         let mut alert = AlertState::new();
 
         // Trigger alert
-        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90));
+        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90), Instant::now());
         assert!(alert.show_alert);
 
         // Simulate scroll completing by setting offset past the threshold
@@ -721,33 +842,49 @@ mod tests {
         alert.scroll_offset = complete_dist + 1.0;
 
         // Update should mark as displayed and clear (only one alert)
-        alert.update(&state, &snapshot, &mut renderer, 0.0, Duration::from_secs(90));
+        alert.update(&state, &snapshot, &mut renderer, 0.0, Duration::from_secs(90), Instant::now());
 
         assert!(!alert.show_alert, "alert should clear after all shown this cycle");
     }
 
     #[test]
-    fn test_alert_max_duration_timeout() {
-        let state = make_state(vec![make_alert("a1")]);
+    fn test_cycle_cap_applies_between_alerts_only() {
+        let state = make_state(vec![make_alert("a1"), make_alert("a2")]);
         let snapshot = DisplaySnapshot {
             trains: vec![make_train("1", "Uptown", 0)],
-            alerts: vec![make_alert("a1")],
+            alerts: vec![],
             fetched_at: 0.0,
         };
+        let cap = Duration::from_secs(90);
         let mut renderer = display::renderer::Renderer::new();
         let mut alert = AlertState::new();
+        let t0 = Instant::now();
 
-        // Trigger alert
-        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90));
+        alert.update(&state, &snapshot, &mut renderer, 1.0, cap, t0);
         assert!(alert.show_alert);
 
-        // Simulate timeout by setting cycle_start_time far in the past
-        alert.cycle_start_time = Instant::now() - Duration::from_secs(100);
+        // Past the cap but mid-scroll: the alert keeps going.
+        let late = t0 + Duration::from_secs(100);
+        alert.update(&state, &snapshot, &mut renderer, 1.0, cap, late);
+        assert!(alert.show_alert, "an alert that has started must finish");
 
-        // Update with a very short max_duration to trigger timeout
-        alert.update(&state, &snapshot, &mut renderer, 1.0, Duration::from_secs(90));
+        // It finishes: the cycle ends instead of starting a2.
+        alert.scroll_offset = renderer.get_scroll_complete_distance() as f32;
+        alert.update(&state, &snapshot, &mut renderer, 1.0, cap, late);
+        assert!(!alert.show_alert, "cycle should end at the cap, between alerts");
 
-        assert!(!alert.show_alert, "alert should clear after max duration timeout");
+        // The same train still at 0 min must not immediately restart a cycle.
+        alert.update(&state, &snapshot, &mut renderer, 1.0, cap, late);
+        assert!(!alert.show_alert, "capped train must not re-trigger");
+
+        // A different arriving train may.
+        let other = DisplaySnapshot {
+            trains: vec![make_train("2", "Wakefield", 0)],
+            ..snapshot.clone()
+        };
+        alert.update(&state, &other, &mut renderer, 1.0, cap, late);
+        assert!(alert.show_alert, "a new arrival should start a cycle");
+        assert_eq!(alert.current_alert.as_ref().unwrap().alert_id, "a2");
     }
 
     #[test]
@@ -763,7 +900,7 @@ mod tests {
             alerts: alerts.clone(),
             fetched_at: 0.0,
         };
-        alert.update(&state, &snapshot_arrive, &mut renderer, 1.0, Duration::from_secs(90));
+        alert.update(&state, &snapshot_arrive, &mut renderer, 1.0, Duration::from_secs(90), Instant::now());
         assert!(alert.show_alert);
         assert_eq!(alert.triggered_by.as_ref().unwrap(), &("1".to_string(), "Uptown".to_string()));
     }
