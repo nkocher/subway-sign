@@ -288,6 +288,11 @@ impl MtaFont {
     ///
     /// Returns the DIAMOND variant for express, CIRCLE for local.
     /// Falls back to CIRCLE if DIAMOND isn't available.
+    /// Get an icon by its font key (e.g. `ICON_AIRPLANE`, `ROUTE_SIR_CIRCLE`).
+    pub fn get_icon(&self, name: &str) -> Option<&RouteIcon> {
+        self.route_icons.get(name)
+    }
+
     pub fn get_route_icon(&self, route: &str, is_express: bool) -> Option<&RouteIcon> {
         let shape = if is_express { "DIAMOND" } else { "CIRCLE" };
         let name = format!("ROUTE_{}_{}", route, shape);

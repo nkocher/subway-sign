@@ -259,11 +259,7 @@ impl MtaClient {
 
             if let Some(ref header_text) = alert_proto.header_text {
                 if let Some(translation) = header_text.translation.first() {
-                    let clean_text: String = translation
-                        .text
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ");
+                    let clean_text = clean_alert_text(&translation.text);
 
                     let periods: Vec<(Option<u64>, Option<u64>)> = alert_proto
                         .active_period
@@ -443,6 +439,15 @@ async fn fetch_single_feed(
     Ok(trains)
 }
 
+/// Collapse whitespace and map typographic apostrophes to the sign's `'`
+/// glyph (the font has no curly quotes; they would draw as a blank gap).
+pub fn clean_alert_text(text: &str) -> String {
+    text.replace(['\u{2018}', '\u{2019}'], "'")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Detect if a train is running express service.
 fn detect_express(
     trip: &transit_realtime::TripDescriptor,
@@ -479,6 +484,14 @@ fn deduplicate_trains(trains: Vec<Train>) -> Vec<Train> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_clean_alert_text() {
+        assert_eq!(
+            clean_alert_text("Trains  aren\u{2019}t\n running"),
+            "Trains aren't running"
+        );
+    }
 
     #[test]
     fn test_deduplicate_trains() {
