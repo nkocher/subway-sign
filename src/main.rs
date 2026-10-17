@@ -49,23 +49,70 @@ pub struct Preview {
 /// train list. Checked only between alerts; a started alert always finishes.
 const MAX_ALERT_CYCLE_DURATION: std::time::Duration = std::time::Duration::from_secs(90);
 
-/// Clock face hours: from 22:00 until 06:00 the sign is a clock.
+/// Shortest gap between the end of one alert cycle and the start of the next.
+/// At a multi-platform station a train is at 0 min nearly all the time.
+const ALERT_CYCLE_SPACING: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Clock face hours: from 22:00 until 06:00 the sign rests on the clock.
 const CLOCK_NIGHT_START_HOUR: u32 = 22;
 const CLOCK_NIGHT_END_HOUR: u32 = 6;
-/// During the day the clock shows for the first CLOCK_SHOW_MINUTES of every
-/// CLOCK_PERIOD_MINUTES.
-const CLOCK_PERIOD_MINUTES: i64 = 7;
-const CLOCK_SHOW_MINUTES: i64 = 2;
+/// Bottom-row rotation: one 3s step per train, trains #2-#7.
+const ROTATION_TRAIN_STEPS: usize = 6;
+/// By day, every CLOCK_EVERY_PASSES-th pass of the rotation ends with
+/// CLOCK_PAGE_STEPS steps of clock face (~6s of clock every ~42s).
+const CLOCK_EVERY_PASSES: u64 = 2;
+const CLOCK_PAGE_STEPS: usize = 2;
+/// At night every pass ends with NIGHT_CLOCK_STEPS steps of clock face, so
+/// the sign rests on the clock with one pass of arrivals a minute (~42s + 18s).
+const NIGHT_CLOCK_STEPS: usize = 14;
+/// Train data older than this is not shown. `fetched_at` is stamped on every
+/// fetch attempt (a failed feed falls back to its cache for up to 300s, then
+/// drops out and the sign shows "no-data"), so this guards a stalled fetch task.
+const STALE_FEED_SECS: f64 = 120.0;
 
-/// Whether the clock face is due at local time `now`.
-fn clock_due(now: &chrono::DateTime<chrono::Local>) -> bool {
-    use chrono::Timelike;
-    let hour = now.hour();
-    let night = !(CLOCK_NIGHT_END_HOUR..CLOCK_NIGHT_START_HOUR).contains(&hour);
-    // Counted on the epoch rather than the hour (60 isn't a multiple of 7),
-    // so the spacing is always exactly CLOCK_PERIOD_MINUTES.
-    let minute = now.timestamp().div_euclid(60);
-    night || minute.rem_euclid(CLOCK_PERIOD_MINUTES) < CLOCK_SHOW_MINUTES
+/// Whether `hour` (local) is in the night clock hours.
+fn is_night(hour: u32) -> bool {
+    !(CLOCK_NIGHT_END_HOUR..CLOCK_NIGHT_START_HOUR).contains(&hour)
+}
+
+/// Advance the bottom-row rotation one step. Returns the next (step, pass).
+/// Steps from ROTATION_TRAIN_STEPS onward are clock steps. The clock is
+/// scheduled rather than triggered by trains: at a multi-platform station
+/// one is nearly always at 0-1 min, which would keep the clock away.
+fn advance_rotation(step: usize, pass: u64, night: bool) -> (usize, u64) {
+    let clock_steps = if night {
+        NIGHT_CLOCK_STEPS
+    } else if pass % CLOCK_EVERY_PASSES == CLOCK_EVERY_PASSES - 1 {
+        CLOCK_PAGE_STEPS
+    } else {
+        0
+    };
+    let len = ROTATION_TRAIN_STEPS + clock_steps;
+    if step + 1 < len { (step + 1, pass) } else { (0, pass + 1) }
+}
+
+/// What decides the face for one frame.
+struct FaceInputs {
+    night: bool,
+    has_trains: bool,
+    data_fresh: bool,
+    rotation_step: usize,
+    alert_showing: bool,
+}
+
+/// Why the clock face shows this frame, or None for arrivals.
+fn clock_reason(f: &FaceInputs) -> Option<&'static str> {
+    if f.alert_showing {
+        None // a started alert always finishes
+    } else if !f.has_trains {
+        Some("no-data")
+    } else if !f.data_fresh {
+        Some("stale")
+    } else if f.rotation_step >= ROTATION_TRAIN_STEPS {
+        Some(if f.night { "night" } else { "rotation" })
+    } else {
+        None
+    }
 }
 
 /// Current time as seconds since the Unix epoch.
@@ -341,6 +388,8 @@ struct AlertState {
     /// new cycle while it is still sitting at 0 min, or the cap would never
     /// hand the bottom row back to the train list.
     capped_train: Option<(String, String)>,
+    /// When the last alert cycle ended (see ALERT_CYCLE_SPACING).
+    last_cycle_end: Option<Instant>,
 }
 
 impl AlertState {
@@ -352,6 +401,7 @@ impl AlertState {
             triggered_by: None,
             cycle_start_time: Instant::now(),
             capped_train: None,
+            last_cycle_end: None,
         }
     }
 
@@ -409,6 +459,7 @@ impl AlertState {
             && !self.show_alert
             && allow_new_cycles
             && self.capped_train.is_none()
+            && self.last_cycle_end.is_none_or(|end| now.duration_since(end) >= ALERT_CYCLE_SPACING)
             && am.has_alerts()
         {
             am.reset_cycle();
@@ -471,7 +522,7 @@ impl AlertState {
                 }
             } else {
                 let reason = if !allow_new_cycles {
-                    "clock due"
+                    "held"
                 } else if capped {
                     "cycle cap"
                 } else if triggering_train_departed {
@@ -487,6 +538,7 @@ impl AlertState {
                     self.capped_train =
                         Some((first_train.route.clone(), first_train.destination.clone()));
                 }
+                self.last_cycle_end = Some(now);
                 self.clear();
             }
         }
@@ -513,6 +565,8 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
     let mut current_brightness = brightness;
     let mut display_off = pct == 0;
     let mut cycle_index: usize = 0;
+    let mut rotation_pass: u64 = 0;
+    let mut clock_shown: Option<&'static str> = None;
     let mut flash_state = false;
 
     let mut live_source = state.snapshot.load_full();
@@ -555,10 +609,14 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
         }
         let snapshot = Arc::clone(&live_snapshot);
 
-        // Update cycle index
+        let local_now = chrono::Local::now();
+        let night = is_night(chrono::Timelike::hour(&local_now));
+
+        // Advance the bottom-row rotation (train pages, plus clock pages by day)
         if last_cycle_time.elapsed() >= CYCLE_INTERVAL {
             last_cycle_time = Instant::now();
-            cycle_index = (cycle_index + 1) % 6;
+            (cycle_index, rotation_pass) =
+                advance_rotation(cycle_index, rotation_pass, night);
         }
 
         // Update flash state
@@ -569,11 +627,9 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
 
         // A debug preview overrides the schedule until it expires
         let preview = state.preview.load_full().filter(|p| frame_start < p.until);
-        let local_now = chrono::Local::now();
-        let clock_is_due = clock_due(&local_now);
-
-        // Alert state machine. While the clock is due, an alert already
-        // scrolling finishes, but no new alert cycle starts.
+        let data_fresh = unix_now_f64() - snapshot.fetched_at <= STALE_FEED_SECS;
+        // Alert state machine. A new alert cycle starts only on fresh data
+        // while arrivals are on screen; an alert already scrolling finishes.
         if preview.is_none() {
             alert_state.update(
                 &state,
@@ -581,9 +637,26 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
                 &mut renderer,
                 SCROLL_SPEED,
                 frame_start,
-                !clock_is_due,
+                data_fresh && clock_shown.is_none(),
             );
         }
+
+        let clock = clock_reason(&FaceInputs {
+            night,
+            has_trains: !snapshot.trains.is_empty(),
+            data_fresh,
+            rotation_step: cycle_index,
+            alert_showing: alert_state.show_alert,
+        });
+        if clock.is_some() != clock_shown.is_some() {
+            match clock {
+                Some(reason) => info!("[CLOCK] on reason={}", reason),
+                None => info!("[CLOCK] off first_train_min={}", snapshot.get_first_train().minutes),
+            }
+        }
+        clock_shown = clock;
+        // A clock step drawn as arrivals (alert finishing, preview) keeps the last train page
+        let train_page = cycle_index.min(ROTATION_TRAIN_STEPS - 1);
 
         // Render frame (all black when brightness is 0%)
         let frame = if display_off {
@@ -601,7 +674,7 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
                     }
                     renderer.render_frame(
                         &snapshot,
-                        cycle_index,
+                        train_page,
                         flash_state,
                         preview_scroll,
                         true,
@@ -610,12 +683,12 @@ fn render_loop(state: Arc<AppState>, running: Arc<AtomicBool>) {
                 }
                 _ => renderer.render_clock(&local_now),
             }
-        } else if clock_is_due && !alert_state.show_alert {
+        } else if clock.is_some() {
             renderer.render_clock(&local_now)
         } else {
             renderer.render_frame(
                 &snapshot,
-                cycle_index,
+                train_page,
                 flash_state,
                 alert_state.scroll_offset,
                 alert_state.show_alert,
@@ -973,12 +1046,14 @@ mod tests {
         alert.update(&state, &snapshot, &mut renderer, 1.0, late, true);
         assert!(!alert.show_alert, "capped train must not re-trigger");
 
-        // A different arriving train may.
+        // A different arriving train may, once the cycle spacing has passed.
         let other = DisplaySnapshot {
             trains: vec![make_train("2", "Wakefield", 0)],
             ..snapshot.clone()
         };
         alert.update(&state, &other, &mut renderer, 1.0, late, true);
+        assert!(!alert.show_alert, "no new cycle within the spacing");
+        alert.update(&state, &other, &mut renderer, 1.0, late + ALERT_CYCLE_SPACING, true);
         assert!(alert.show_alert, "a new arrival should start a cycle");
         assert_eq!(alert.current_alert.as_ref().unwrap().alert_id, "a2");
     }
@@ -1001,30 +1076,88 @@ mod tests {
         assert_eq!(alert.triggered_by.as_ref().unwrap(), &("1".to_string(), "Uptown".to_string()));
     }
 
-    fn local_at(h: u32, m: u32) -> chrono::DateTime<chrono::Local> {
-        use chrono::TimeZone;
-        chrono::Local.with_ymd_and_hms(2026, 10, 5, h, m, 0).unwrap()
-    }
-
-    #[test]
-    fn test_clock_due_all_night() {
-        for (h, m) in [(22, 0), (23, 59), (0, 0), (3, 0), (5, 59)] {
-            assert!(clock_due(&local_at(h, m)), "{:02}:{:02} should be clock", h, m);
+    fn face(night: bool, step: usize) -> FaceInputs {
+        FaceInputs {
+            night,
+            has_trains: true,
+            data_fresh: true,
+            rotation_step: step,
+            alert_showing: false,
         }
     }
 
     #[test]
-    fn test_clock_due_two_of_every_seven_minutes_by_day() {
-        for start in [(6, 0), (9, 31), (12, 0), (21, 53)] {
-            let due: Vec<bool> = (0..7)
-                .map(|i| clock_due(&(local_at(start.0, start.1) + chrono::Duration::minutes(i))))
-                .collect();
-            assert_eq!(due.iter().filter(|&&d| d).count(), 2, "from {:?}: {:?}", start, due);
+    fn test_night_hours() {
+        for (h, night) in [(21, false), (22, true), (23, true), (0, true), (5, true), (6, false), (12, false)] {
+            assert_eq!(is_night(h), night, "hour {}", h);
         }
     }
 
     #[test]
-    fn test_clock_due_holds_new_alert_cycles() {
+    fn test_clock_reason() {
+        // Trains on train steps, the clock on clock steps, day or night.
+        assert_eq!(clock_reason(&face(false, 3)), None);
+        assert_eq!(clock_reason(&face(false, ROTATION_TRAIN_STEPS)), Some("rotation"));
+        assert_eq!(clock_reason(&face(true, 3)), None);
+        assert_eq!(clock_reason(&face(true, ROTATION_TRAIN_STEPS)), Some("night"));
+        // No data or stale data shows the clock on any step.
+        assert_eq!(clock_reason(&FaceInputs { has_trains: false, ..face(false, 0) }), Some("no-data"));
+        assert_eq!(clock_reason(&FaceInputs { data_fresh: false, ..face(false, 0) }), Some("stale"));
+        // A scrolling alert is never covered.
+        for night in [true, false] {
+            let f = FaceInputs { alert_showing: true, data_fresh: false, ..face(night, ROTATION_TRAIN_STEPS) };
+            assert_eq!(clock_reason(&f), None);
+        }
+    }
+
+    /// Run the rotation for `passes` passes; count clock steps per pass.
+    fn clock_steps_per_pass(night: bool, passes: u64) -> Vec<usize> {
+        let (mut step, mut pass) = (0, 0);
+        let mut counts = vec![0; passes as usize];
+        while pass < passes {
+            if step >= ROTATION_TRAIN_STEPS {
+                counts[pass as usize] += 1;
+            }
+            (step, pass) = advance_rotation(step, pass, night);
+        }
+        counts
+    }
+
+    #[test]
+    fn test_rotation_clock_pages() {
+        assert_eq!(clock_steps_per_pass(false, 4), vec![0, CLOCK_PAGE_STEPS, 0, CLOCK_PAGE_STEPS]);
+        assert_eq!(clock_steps_per_pass(true, 4), vec![NIGHT_CLOCK_STEPS; 4]);
+    }
+
+    #[test]
+    fn test_alert_cycles_are_spaced() {
+        let state = make_state(vec![make_alert("a1"), make_alert("a2")]);
+        let mut renderer = display::renderer::Renderer::new();
+        let mut alert = AlertState::new();
+        let t0 = Instant::now();
+        let at = |route: &str, minutes| DisplaySnapshot {
+            trains: vec![make_train(route, "Uptown", minutes)],
+            alerts: vec![],
+            fetched_at: 0.0,
+        };
+
+        alert.update(&state, &at("1", 0), &mut renderer, 1.0, t0, true);
+        assert!(alert.show_alert);
+        // The train leaves as a1 finishes: the cycle ends with a2 unshown.
+        alert.scroll_offset = renderer.get_scroll_complete_distance() as f32;
+        alert.update(&state, &at("1", 5), &mut renderer, 1.0, t0, true);
+        assert!(!alert.show_alert, "cycle ends when the train departs");
+
+        // The next arrival inside the spacing starts nothing; after it, it does.
+        let soon = t0 + ALERT_CYCLE_SPACING - Duration::from_secs(1);
+        alert.update(&state, &at("2", 0), &mut renderer, 1.0, soon, true);
+        assert!(!alert.show_alert);
+        alert.update(&state, &at("3", 0), &mut renderer, 1.0, t0 + ALERT_CYCLE_SPACING, true);
+        assert!(alert.show_alert);
+    }
+
+    #[test]
+    fn test_held_alert_cycles() {
         let state = make_state(vec![make_alert("a1"), make_alert("a2")]);
         let snapshot = DisplaySnapshot {
             trains: vec![make_train("1", "Uptown", 0)],
@@ -1035,17 +1168,17 @@ mod tests {
         let mut alert = AlertState::new();
         let t0 = Instant::now();
 
-        // Clock due: an arriving train does not start alerts.
+        // Held (stale data or the clock up): an arriving train does not start alerts.
         alert.update(&state, &snapshot, &mut renderer, 1.0, t0, false);
         assert!(!alert.show_alert);
 
-        // An alert already scrolling finishes, then the cycle ends for the clock.
+        // An alert already scrolling finishes, then the cycle ends.
         alert.update(&state, &snapshot, &mut renderer, 1.0, t0, true);
         assert!(alert.show_alert);
         alert.update(&state, &snapshot, &mut renderer, 1.0, t0, false);
         assert!(alert.show_alert, "a started alert is never cut off");
         alert.scroll_offset = renderer.get_scroll_complete_distance() as f32;
         alert.update(&state, &snapshot, &mut renderer, 1.0, t0, false);
-        assert!(!alert.show_alert, "no next alert while the clock is due");
+        assert!(!alert.show_alert, "no next alert while held");
     }
 }
